@@ -1,0 +1,254 @@
+//! Utilità condivise dai test di integrazione: server reale su porta effimera,
+//! configurazione isolata in una cartella temporanea, generazione di sorgenti
+//! video di prova con ffmpeg.
+//!
+//! Ogni target di test usa solo una parte di queste utilità: il resto
+//! risulterebbe inutilizzato in quel target.
+#![allow(dead_code)]
+
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use av1webconverter::config::{AuthConfig, Config, EncodingParams};
+use av1webconverter::state::AppState;
+use tempfile::TempDir;
+
+pub struct TestServer {
+    pub base_url: String,
+    pub client: reqwest::Client,
+    pub temp: TempDir,
+    pub output_dir: PathBuf,
+    pub input_dir: PathBuf,
+}
+
+impl TestServer {
+    pub fn url(&self, path: &str) -> String {
+        format!("{}{}", self.base_url, path)
+    }
+}
+
+/// Avvia il server con la configurazione indicata su una porta libera.
+pub async fn start_with(mut mutate: impl FnMut(&mut Config)) -> TestServer {
+    let temp = tempfile::tempdir().expect("cartella temporanea");
+    let mut config = Config::default();
+    config.paths.input_dir = temp.path().join("in");
+    config.paths.output_dir = temp.path().join("out");
+    config.paths.data_dir = temp.path().join("data");
+    config.paths.log_dir = temp.path().join("logs");
+    config.logging.json_file = false;
+    config.auth = AuthConfig {
+        enabled: false,
+        username: "admin".into(),
+        password: "segreta".into(),
+    };
+    // I test devono restare rapidi: preset veloce e progresso frequente.
+    // `tune=5` richiede SVT-AV1 4.x (quello dell'immagine custom): sull'ffmpeg
+    // di sistema si usa `tune=0`, accettato da tutte le versioni.
+    config.encoding = EncodingParams {
+        preset: 12,
+        crf: 50,
+        scale_height: 120,
+        progress_interval: 0.5,
+        svtav1_params: "tune=0".into(),
+        ..Default::default()
+    };
+    mutate(&mut config);
+    config.prepare_directories().expect("preparazione cartelle");
+
+    let input_dir = config.paths.input_dir.clone();
+    let output_dir = config.paths.output_dir.clone();
+
+    let state = AppState::new(config).await.expect("stato applicativo");
+    let app = av1webconverter::api::router(state);
+
+    let listener =
+        tokio::net::TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+            .await
+            .expect("bind su porta effimera");
+    let address = listener.local_addr().expect("indirizzo locale");
+
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    TestServer {
+        base_url: format!("http://{address}"),
+        client: reqwest::Client::builder()
+            .timeout(Duration::from_secs(600))
+            .build()
+            .expect("client HTTP"),
+        temp,
+        output_dir,
+        input_dir,
+    }
+}
+
+pub async fn start() -> TestServer {
+    start_with(|_| {}).await
+}
+
+/// Vero se ffmpeg e ffprobe offrono le funzionalità richieste dal runtime:
+/// libsvtav1 e l'opzione `reset_sar` del filtro scale, presenti nell'immagine
+/// custom basata su FFmpeg 8.1.2.
+pub fn ffmpeg_with_svtav1() -> bool {
+    let encoders = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-encoders"])
+        .output();
+    let probe = std::process::Command::new("ffprobe")
+        .arg("-version")
+        .output();
+    let scale_help = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-h", "filter=scale"])
+        .output();
+    match (encoders, probe, scale_help) {
+        (Ok(encoders), Ok(probe), Ok(scale_help)) => {
+            probe.status.success()
+                && String::from_utf8_lossy(&encoders.stdout).contains("libsvtav1")
+                && String::from_utf8_lossy(&scale_help.stdout).contains("reset_sar")
+        }
+        _ => false,
+    }
+}
+
+/// Genera un MP4 di prova con traccia video e audio.
+pub fn make_test_video(path: &Path, seconds: u32) {
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y"])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("testsrc=duration={seconds}:size=320x240:rate=10"),
+        ])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("sine=frequency=440:duration={seconds}"),
+        ])
+        .args(["-c:v", "mpeg4", "-q:v", "5", "-c:a", "aac", "-b:a", "64k"])
+        .arg(path)
+        .status()
+        .expect("generazione video di prova");
+    assert!(status.success(), "ffmpeg non ha generato il video di prova");
+    assert!(path.exists());
+}
+
+/// Genera un MP4 anamorfico: 720x576 con DAR dichiarato 16:9, cioè pixel non
+/// quadrati (SAR 64:45), come un PAL widescreen.
+pub fn make_anamorphic_video(path: &Path, seconds: u32) {
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y"])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("testsrc=duration={seconds}:size=720x576:rate=10"),
+        ])
+        .args(["-c:v", "mpeg4", "-q:v", "5", "-aspect", "16:9"])
+        .arg(path)
+        .status()
+        .expect("generazione video anamorfico");
+    assert!(
+        status.success(),
+        "ffmpeg non ha generato il video anamorfico"
+    );
+}
+
+/// Geometria del primo stream video: larghezza, altezza, SAR, DAR.
+pub fn video_geometry(path: &Path) -> (u32, u32, String, String) {
+    let output = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,sample_aspect_ratio,display_aspect_ratio",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .expect("ffprobe sulla geometria");
+    let text = String::from_utf8_lossy(&output.stdout);
+    let fields: Vec<&str> = text.trim().split(',').collect();
+    assert!(fields.len() >= 4, "output ffprobe inatteso: {text:?}");
+    (
+        fields[0].parse().expect("larghezza"),
+        fields[1].parse().expect("altezza"),
+        fields[2].to_string(),
+        fields[3].to_string(),
+    )
+}
+
+/// Rapporto numerico da una frazione "a:b" di ffprobe.
+pub fn ratio(value: &str) -> f64 {
+    let (left, right) = value.split_once(':').expect("frazione a:b");
+    left.parse::<f64>().expect("numeratore") / right.parse::<f64>().expect("denominatore")
+}
+
+/// Codec del primo stream video di un file, secondo ffprobe.
+pub fn video_codec(path: &Path) -> String {
+    let output = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+        ])
+        .arg(path)
+        .output()
+        .expect("ffprobe sull'output");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// Corpo multipart con un solo file, costruito a mano per non dipendere da
+/// helper esterni.
+pub fn multipart_body(field: &str, filename: &str, content: &[u8]) -> (String, Vec<u8>) {
+    let boundary = "----av1webconverterboundary";
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"{field}\"; filename=\"{filename}\"\r\n")
+            .as_bytes(),
+    );
+    body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+    body.extend_from_slice(content);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
+/// Attende che il job raggiunga uno stato terminale.
+pub async fn wait_for_job_status(
+    server: &TestServer,
+    job_id: &str,
+    timeout: Duration,
+) -> serde_json::Value {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let job: serde_json::Value = server
+            .client
+            .get(server.url(&format!("/api/jobs/{job_id}")))
+            .send()
+            .await
+            .expect("lettura job")
+            .json()
+            .await
+            .expect("json del job");
+        let status = job["status"].as_str().unwrap_or_default().to_string();
+        if matches!(status.as_str(), "completed" | "failed" | "stopped") {
+            return job;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "il job è rimasto in stato {status} oltre il tempo massimo"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}

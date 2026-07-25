@@ -1,0 +1,17 @@
+# Contesto di build minimo: servono solo il manifest, i sorgenti e la
+# configurazione di esempio.
+*
+
+!Cargo.toml
+!Cargo.lock
+!config.example.toml
+!Dockerfile.ffmpeg-svtav1
+!src
+src/**/*.rs.orig
+
+# Cartelle di lavoro e artefatti: mai nel contesto.
+target
+in
+out
+data
+logs

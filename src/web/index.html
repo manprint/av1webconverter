@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>av1webconverter</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark">AV1</span>
+        <div>
+          <h1>av1webconverter</h1>
+          <p class="subtitle">Codifica video AV1 con SVT-AV1</p>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <span id="connection" class="badge badge-muted">connessione…</span>
+        <button id="new-job-button" class="button primary">Nuovo job</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="new-job-panel" class="panel hidden">
+        <h2>Nuovo job di conversione</h2>
+        <form id="new-job-form" class="form">
+          <div class="field">
+            <label for="job-name">Nome del job</label>
+            <input id="job-name" name="name" type="text" required placeholder="es. Serie TV — stagione 1" />
+          </div>
+          <div class="field">
+            <label for="job-concurrency">Conversioni simultanee</label>
+            <input id="job-concurrency" name="concurrency" type="number" min="1" max="64" />
+            <small>1 = i file vengono convertiti in sequenza.</small>
+          </div>
+
+          <fieldset class="params">
+            <legend>Parametri di conversione</legend>
+            <div class="grid">
+              <div class="field">
+                <label for="param-mode">Modalità</label>
+                <select id="param-mode" name="mode">
+                  <option value="crf">Qualità costante (CRF)</option>
+                  <option value="target_size">Dimensione target (VBR 2 passaggi)</option>
+                </select>
+              </div>
+              <div class="field" data-mode="crf">
+                <label for="param-crf">CRF</label>
+                <input id="param-crf" name="crf" type="number" min="0" max="63" />
+              </div>
+              <div class="field hidden" data-mode="target_size">
+                <label for="param-target-size">Dimensione target (MB)</label>
+                <input id="param-target-size" name="target_size_mb" type="number" min="1" step="1" />
+              </div>
+              <div class="field hidden" data-mode="target_size">
+                <label for="param-margin">Margine overhead (%)</label>
+                <input id="param-margin" name="size_margin_percent" type="number" min="0" max="50" step="0.1" />
+              </div>
+              <div class="field">
+                <label for="param-preset">Preset</label>
+                <input id="param-preset" name="preset" type="number" min="0" max="13" />
+              </div>
+              <div class="field">
+                <label for="param-scale-height">Altezza massima (px)</label>
+                <input id="param-scale-height" name="scale_height" type="number" min="16" max="4320" />
+              </div>
+              <div class="field">
+                <label for="param-audio-bitrate">Bitrate audio</label>
+                <input id="param-audio-bitrate" name="audio_bitrate" type="text" placeholder="48k" />
+              </div>
+              <div class="field" data-mode="crf">
+                <label for="param-svtav1">svtav1-params</label>
+                <input id="param-svtav1" name="svtav1_params" type="text" placeholder="tune=5" />
+                <small>In modalità dimensione target viene forzato <code>tune=0</code>.</small>
+              </div>
+              <div class="field">
+                <label for="param-pixel-format">Formato pixel</label>
+                <input id="param-pixel-format" name="pixel_format" type="text" placeholder="yuv420p10le" />
+              </div>
+              <div class="field">
+                <label for="param-keyint">Keyframe ogni (frame)</label>
+                <input id="param-keyint" name="keyint" type="number" min="1" max="3000" />
+              </div>
+              <div class="field">
+                <label for="param-cpus">Thread ffmpeg</label>
+                <input id="param-cpus" name="cpus" type="number" min="1" max="256" placeholder="automatico" />
+              </div>
+              <div class="field">
+                <label for="param-progress-interval">Aggiornamento progresso (s)</label>
+                <input id="param-progress-interval" name="progress_interval" type="number" min="0.5" step="0.5" />
+              </div>
+              <div class="field checkbox">
+                <label>
+                  <input id="param-overwrite" name="overwrite" type="checkbox" />
+                  Sovrascrivi gli output già presenti
+                </label>
+              </div>
+            </div>
+          </fieldset>
+
+          <div class="actions">
+            <button type="submit" class="button primary">Crea job</button>
+            <button type="button" id="new-job-cancel" class="button">Annulla</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="jobs" class="jobs"></section>
+      <p id="empty-state" class="empty hidden">Nessun job. Crea il primo job per iniziare.</p>
+    </main>
+
+    <div id="log-overlay" class="overlay hidden">
+      <div class="overlay-card">
+        <header>
+          <h3 id="log-title">Log di conversione</h3>
+          <button id="log-close" class="button">Chiudi</button>
+        </header>
+        <pre id="log-content" class="log"></pre>
+      </div>
+    </div>
+
+    <div id="toasts" class="toasts"></div>
+
+    <template id="job-template">
+      <article class="job panel">
+        <header class="job-header">
+          <div class="job-title">
+            <h2 data-field="name"></h2>
+            <span class="badge" data-field="status"></span>
+          </div>
+          <div class="job-actions">
+            <button class="button" data-action="toggle-files">File</button>
+            <button class="button" data-action="edit">Parametri</button>
+            <button class="button primary" data-action="start">Avvia</button>
+            <button class="button" data-action="stop">Ferma</button>
+            <button class="button" data-action="download-all">Scarica tutto</button>
+            <button class="button danger" data-action="delete">Elimina</button>
+          </div>
+        </header>
+
+        <div class="progress-row">
+          <div class="progress"><div class="progress-bar" data-field="overall-bar"></div></div>
+          <span class="progress-value" data-field="overall-value"></span>
+        </div>
+        <p class="job-meta" data-field="meta"></p>
+        <p class="job-error hidden" data-field="error"></p>
+
+        <div class="job-body hidden" data-field="body">
+          <div class="upload">
+            <label class="button">
+              Aggiungi file
+              <input type="file" multiple hidden data-action="upload-files" />
+            </label>
+            <label class="button">
+              Aggiungi cartella
+              <input type="file" multiple webkitdirectory hidden data-action="upload-folder" />
+            </label>
+            <button class="button" data-action="download-selection">Scarica selezione</button>
+            <span class="upload-status" data-field="upload-status"></span>
+          </div>
+          <div class="params-editor hidden" data-field="params-editor"></div>
+          <table class="files">
+            <thead>
+              <tr>
+                <th class="col-select"><input type="checkbox" data-action="select-all" /></th>
+                <th>File</th>
+                <th>Stato</th>
+                <th class="col-progress">Avanzamento</th>
+                <th>Dimensioni</th>
+                <th class="col-actions"></th>
+              </tr>
+            </thead>
+            <tbody data-field="files"></tbody>
+          </table>
+        </div>
+      </article>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

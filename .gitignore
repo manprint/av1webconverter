@@ -1,0 +1,16 @@
+# Artefatti di build
+/target
+
+# Configurazione locale (usare config.example.toml come base)
+/config.toml
+
+# Cartelle di lavoro del servizio
+/in/
+/out/
+/data/
+/logs/
+
+# Sorgenti e conversioni degli script bash di riferimento
+*.mp4
+converted
+av1-data

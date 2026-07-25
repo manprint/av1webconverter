@@ -1,0 +1,159 @@
+# Compose di produzione per av1webconverter.
+#
+# Avvio:
+#   docker compose up -d --build
+#
+# Per usare un UID/GID diverso dal default:
+#   PUID=1500 PGID=1500 docker compose up -d --build
+#
+# Prima di esporre il servizio, impostare almeno AV1WC_AUTH_PASSWORD con una
+# password robusta (tramite shell o file .env). I valori ${VAR:-default}
+# permettono di sovrascrivere ogni impostazione senza modificare questo file.
+
+x-app-image: &app-image
+  # Immagine finale. Può essere un riferimento di registry già pubblicato.
+  image: "${AV1WC_IMAGE:-av1webconverter:latest}"
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      # Immagine FFmpeg 8.1.2/SVT-AV1 4.2.0 costruita separatamente con
+      # Dockerfile.ffmpeg-svtav1; può essere anche un riferimento di registry.
+      FFMPEG_IMAGE: "${FFMPEG_IMAGE:-local/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0}"
+      # Immagine usata esclusivamente per compilare il binario Rust.
+      RUST_IMAGE: "${RUST_IMAGE:-rust:1.96-bookworm}"
+
+services:
+  # Prepara il bind mount con la proprietà richiesta. Il servizio termina prima
+  # dell'avvio dell'applicazione e consente di cambiare PUID/PGID anche su dati
+  # già esistenti.
+  prepare-data:
+    <<: *app-image
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        install -d /data/in /data/out /data/state /data/logs
+        chown -R "$${PUID}:$${PGID}" /data
+    environment:
+      # UID numerico proprietario dei dati; qualsiasi UID valido, default 1000.
+      PUID: "${PUID:-1000}"
+      # GID numerico proprietario dei dati; qualsiasi GID valido, default 1000.
+      PGID: "${PGID:-1000}"
+    volumes:
+      - type: bind
+        source: "${AV1WC_STORAGE_PATH:-./av1-data}"
+        target: /data
+        bind:
+          create_host_path: true
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  av1webconverter:
+    <<: *app-image
+    depends_on:
+      prepare-data:
+        condition: service_completed_successfully
+
+    # UID:GID numerici del processo. Sovrascrivere con PUID/PGID; default
+    # 1000:1000. Il servizio prepare-data rende scrivibile /data per tali ID.
+    user: "${PUID:-1000}:${PGID:-1000}"
+
+    ports:
+      # IP host: 127.0.0.1 (solo reverse proxy/macchina locale) oppure 0.0.0.0
+      # (tutte le interfacce). AV1WC_HOST_PORT è la porta pubblicata sull'host.
+      - "${AV1WC_HOST_IP:-127.0.0.1}:${AV1WC_HOST_PORT:-8080}:${AV1WC_PORT:-8080}/tcp"
+
+    volumes:
+      # Directory persistente: upload, output, stato, temporanei e log.
+      - type: bind
+        source: "${AV1WC_STORAGE_PATH:-./av1-data}"
+        target: /data
+        bind:
+          create_host_path: true
+
+    environment:
+      # Percorso del TOML opzionale. Se assente vengono usati questi default e
+      # gli override d'ambiente. Possibile valore: /config/config.toml.
+      AV1WC_CONFIG: "${AV1WC_CONFIG:-/etc/av1webconverter/config.toml}"
+
+      # Indirizzo interno di ascolto: 0.0.0.0, 127.0.0.1 oppure un IP assegnato.
+      AV1WC_BIND: "${AV1WC_BIND:-0.0.0.0}"
+      # Porta interna TCP, intero 0-65535; in produzione usare 1-65535.
+      AV1WC_PORT: "${AV1WC_PORT:-8080}"
+      # Limite di una singola richiesta di upload, in MB interi positivi.
+      AV1WC_MAX_UPLOAD_MB: "${AV1WC_MAX_UPLOAD_MB:-8192}"
+
+      # Basic Auth per frontend e API; /healthz resta pubblico. Valori veri:
+      # 1, true, yes. Qualunque altro valore (es. false, 0, no) la disabilita.
+      AV1WC_AUTH_ENABLED: "${AV1WC_AUTH_ENABLED:-true}"
+      # Nome utente Basic Auth, stringa non vuota quando l'autenticazione è attiva.
+      AV1WC_AUTH_USERNAME: "${AV1WC_AUTH_USERNAME:-admin}"
+      # CAMBIARE IN PRODUZIONE. Stringa non vuota; default applicativo changeme.
+      AV1WC_AUTH_PASSWORD: "${AV1WC_AUTH_PASSWORD:-changeme}"
+
+      # Percorsi interni persistenti. Devono restare sotto /data con questo mount.
+      AV1WC_INPUT_DIR: "${AV1WC_INPUT_DIR:-/data/in}"
+      AV1WC_OUTPUT_DIR: "${AV1WC_OUTPUT_DIR:-/data/out}"
+      AV1WC_DATA_DIR: "${AV1WC_DATA_DIR:-/data/state}"
+      AV1WC_LOG_DIR: "${AV1WC_LOG_DIR:-/data/logs}"
+
+      # Binari FFmpeg/ffprobe. Possibili valori: nomi risolti dal PATH o percorsi
+      # assoluti come /usr/local/bin/ffmpeg e /usr/local/bin/ffprobe.
+      AV1WC_FFMPEG_BIN: "${AV1WC_FFMPEG_BIN:-ffmpeg}"
+      AV1WC_FFPROBE_BIN: "${AV1WC_FFPROBE_BIN:-ffprobe}"
+
+      # Conversioni simultanee dentro ogni job: intero da 1 a 64.
+      AV1WC_DEFAULT_CONCURRENCY: "${AV1WC_DEFAULT_CONCURRENCY:-1}"
+
+      # Notifiche Slack. Valori veri: 1, true, yes; false, 0 o no disabilitano.
+      AV1WC_SLACK_ENABLED: "${AV1WC_SLACK_ENABLED:-false}"
+      # URL Incoming Webhook HTTPS. Per abilitarlo impostare sia questo valore
+      # sia AV1WC_SLACK_ENABLED=true. Default: stringa vuota.
+      AV1WC_SLACK_WEBHOOK_URL: "${AV1WC_SLACK_WEBHOOK_URL:-}"
+
+      # Livello/filtro tracing di configurazione: trace, debug, info, warn, error
+      # oppure direttive come av1webconverter=debug,tower_http=info.
+      AV1WC_LOG_LEVEL: "${AV1WC_LOG_LEVEL:-info}"
+      # Override avanzato letto direttamente da tracing. Ha precedenza su
+      # AV1WC_LOG_LEVEL; di default ne eredita il valore.
+      AV1WC_LOG: "${AV1WC_LOG:-${AV1WC_LOG_LEVEL:-info}}"
+
+      # CRF SVT-AV1 in modalità qualità costante: intero 0-63; valori inferiori
+      # aumentano qualità e dimensione. Default 47.
+      AV1WC_CRF: "${AV1WC_CRF:-47}"
+      # Preset SVT-AV1: 0 lento/massima efficienza, 13 veloce; default 1.
+      AV1WC_PRESET: "${AV1WC_PRESET:-1}"
+      # Altezza massima output: intero 16-4320. Il DAR è mantenuto e il SAR
+      # viene normalizzato a 1:1 tramite reset_sar=1.
+      AV1WC_SCALE_HEIGHT: "${AV1WC_SCALE_HEIGHT:-480}"
+      # Bitrate audio Opus: numero positivo, opzionalmente con suffisso k/K/m/M;
+      # esempi 48k, 128k, 1.5M, 96000.
+      AV1WC_AUDIO_BITRATE: "${AV1WC_AUDIO_BITRATE:-48k}"
+      # Parametri passati a -svtav1-params. Default tune=5 per CRF; in modalità
+      # target_size l'applicazione forza tune=0. Ammessi token separati da ':'.
+      AV1WC_SVTAV1_PARAMS: "${AV1WC_SVTAV1_PARAMS:-tune=5}"
+      # Intervallo degli aggiornamenti di progresso, secondi > 0 anche decimali.
+      AV1WC_PROGRESS_INTERVAL: "${AV1WC_PROGRESS_INTERVAL:-5.0}"
+
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 2m
+
+    # Rotazione dei log stdout/stderr gestiti dal daemon Docker. I log JSON
+    # applicativi dentro /data/logs hanno invece rotazione giornaliera propria.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

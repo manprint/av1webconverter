@@ -1,0 +1,134 @@
+# syntax=docker/dockerfile:1
+
+FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS builder
+
+ARG FFMPEG_VERSION=8.1.2
+ARG FFMPEG_SHA256=464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
+ARG SVT_AV1_VERSION=4.2.0
+ARG SVT_AV1_SHA256=512f2ea5649e3e76c2dddcc25c2556fb67a9582baaab207c9c96161c94659dad
+ARG VMAF_VERSION=3.1.0
+ARG VMAF_SHA256=80090e29d7fd0db472ddc663513f5be89bc936815e62b767e630c1d627279fe2
+ARG DAV1D_VERSION=1.5.3
+ARG DAV1D_SHA256=732010aa5ef461fa93355ed2c6c5fedb48ddc4b74e697eaabe8907eaeb943011
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bzip2 \
+        build-essential \
+        ca-certificates \
+        cmake \
+        curl \
+        libopus-dev \
+        meson \
+        nasm \
+        ninja-build \
+        pkg-config \
+        xxd \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+RUN curl -fL --retry 3 \
+        -o svt-av1.tar.bz2 \
+        "https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v${SVT_AV1_VERSION}/SVT-AV1-v${SVT_AV1_VERSION}.tar.bz2" \
+    && printf '%s  %s\n' "${SVT_AV1_SHA256}" svt-av1.tar.bz2 | sha256sum -c - \
+    && tar -xf svt-av1.tar.bz2 \
+    && cmake \
+        -S "SVT-AV1-v${SVT_AV1_VERSION}" \
+        -B svt-build \
+        -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/ffmpeg \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+        -DBUILD_APPS=OFF \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DBUILD_TESTING=OFF \
+    && cmake --build svt-build --parallel \
+    && cmake --install svt-build
+
+RUN curl -fL --retry 3 \
+        -o dav1d.tar.xz \
+        "https://download.videolan.org/pub/videolan/dav1d/${DAV1D_VERSION}/dav1d-${DAV1D_VERSION}.tar.xz" \
+    && printf '%s  %s\n' "${DAV1D_SHA256}" dav1d.tar.xz | sha256sum -c - \
+    && tar -xf dav1d.tar.xz \
+    && meson setup \
+        dav1d-build \
+        "dav1d-${DAV1D_VERSION}" \
+        --buildtype=release \
+        --default-library=static \
+        --prefix=/opt/ffmpeg \
+        --libdir=lib \
+        -Denable_tools=false \
+        -Denable_tests=false \
+    && meson compile -C dav1d-build \
+    && meson install -C dav1d-build
+
+RUN curl -fL --retry 3 \
+        -o vmaf.tar.gz \
+        "https://github.com/Netflix/vmaf/archive/refs/tags/v${VMAF_VERSION}.tar.gz" \
+    && printf '%s  %s\n' "${VMAF_SHA256}" vmaf.tar.gz | sha256sum -c - \
+    && tar -xf vmaf.tar.gz \
+    && meson setup \
+        vmaf-build \
+        "vmaf-${VMAF_VERSION}/libvmaf" \
+        --buildtype=release \
+        --default-library=static \
+        --prefix=/opt/ffmpeg \
+        --libdir=lib \
+        -Denable_tests=false \
+        -Denable_docs=false \
+        -Denable_tools=false \
+        -Dbuilt_in_models=true \
+    && meson compile -C vmaf-build \
+    && meson install -C vmaf-build
+
+ENV PKG_CONFIG_PATH=/opt/ffmpeg/lib/pkgconfig
+
+RUN curl -fL --retry 3 \
+        -o ffmpeg.tar.xz \
+        "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
+    && printf '%s  %s\n' "${FFMPEG_SHA256}" ffmpeg.tar.xz | sha256sum -c - \
+    && tar -xf ffmpeg.tar.xz \
+    && cd "ffmpeg-${FFMPEG_VERSION}" \
+    && ./configure \
+        --prefix=/usr/local \
+        --disable-autodetect \
+        --disable-debug \
+        --disable-doc \
+        --disable-ffplay \
+        --disable-network \
+        --disable-shared \
+        --enable-static \
+        --enable-libdav1d \
+        --enable-libopus \
+        --enable-libsvtav1 \
+        --enable-libvmaf \
+        --extra-cflags="-I/opt/ffmpeg/include" \
+        --extra-ldflags="-L/opt/ffmpeg/lib" \
+        --extra-libs="-lpthread -lm -lstdc++" \
+    && make -j"$(nproc)" \
+    && make install \
+    && strip /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
+
+FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+
+ARG FFMPEG_VERSION=8.1.2
+ARG SVT_AV1_VERSION=4.2.0
+ARG VMAF_VERSION=3.1.0
+ARG DAV1D_VERSION=1.5.3
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libopus0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
+COPY --from=builder /usr/local/bin/ffprobe /usr/local/bin/ffprobe
+
+LABEL org.opencontainers.image.title="FFmpeg with current SVT-AV1"
+LABEL org.opencontainers.image.description="FFmpeg ${FFMPEG_VERSION}, SVT-AV1 ${SVT_AV1_VERSION}, libvmaf ${VMAF_VERSION}, dav1d ${DAV1D_VERSION}, libopus"
+LABEL org.opencontainers.image.source="https://ffmpeg.org/, https://gitlab.com/AOMediaCodec/SVT-AV1, https://github.com/Netflix/vmaf and https://code.videolan.org/videolan/dav1d"
+LABEL org.opencontainers.image.version="${FFMPEG_VERSION}-svt${SVT_AV1_VERSION}-vmaf${VMAF_VERSION}-dav1d${DAV1D_VERSION}"
+
+ENTRYPOINT ["/usr/local/bin/ffmpeg"]
+CMD ["-hide_banner", "-help"]
