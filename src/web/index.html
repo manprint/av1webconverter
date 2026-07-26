@@ -39,7 +39,7 @@
           <fieldset class="params">
             <legend>Parametri di conversione</legend>
             <div class="grid">
-              <div class="field">
+              <div class="field mode-field">
                 <label for="param-mode">Modalità</label>
                 <select id="param-mode" name="mode">
                   <option value="crf">Qualità costante (CRF)</option>
@@ -112,7 +112,7 @@
     </main>
 
     <div id="log-overlay" class="overlay hidden">
-      <div class="overlay-card">
+      <div class="overlay-card" role="dialog" aria-modal="true" aria-labelledby="log-title">
         <header>
           <h3 id="log-title">Log di conversione</h3>
           <button id="log-close" class="button">Chiudi</button>

@@ -114,6 +114,7 @@ code {
 }
 
 main {
+  width: 100%;
   max-width: 1120px;
   margin: 0 auto;
   padding: 1.5rem;
@@ -123,6 +124,7 @@ main {
 }
 
 .panel {
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -153,6 +155,11 @@ main {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
+  min-width: 0;
+}
+
+.mode-field {
+  grid-column: span 2;
 }
 
 .field label {
@@ -178,6 +185,8 @@ input[type="text"],
 input[type="number"],
 select {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   padding: 0.5rem 0.6rem;
   background: var(--surface);
   color: var(--text);
@@ -185,6 +194,12 @@ select {
   border-radius: 7px;
   font: inherit;
   font-size: 0.88rem;
+}
+
+select {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 input:focus-visible,
@@ -491,7 +506,7 @@ table.files tr:last-child td {
 .overlay-card {
   display: flex;
   flex-direction: column;
-  width: min(960px, 100%);
+  width: min(1152px, 100%);
   max-height: 80vh;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -509,6 +524,15 @@ table.files tr:last-child td {
   border-bottom: 1px solid var(--border);
 }
 
+.overlay-card header h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.overlay-card header .button {
+  flex: 0 0 auto;
+}
+
 .log {
   margin: 0;
   padding: 1rem 1.1rem;
@@ -517,8 +541,8 @@ table.files tr:last-child td {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.76rem;
   line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: pre;
+  word-break: normal;
 }
 
 /* -- toast --------------------------------------------------------------- */
@@ -554,12 +578,229 @@ table.files tr:last-child td {
 
 @media (max-width: 720px) {
   .topbar {
+    align-items: stretch;
+    flex-wrap: wrap;
+    padding: 0.75rem;
+  }
+
+  .brand {
+    min-width: 0;
+  }
+
+  .mark {
+    flex: 0 0 auto;
+  }
+
+  .topbar-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  main {
+    padding: 0.75rem;
+    gap: 0.75rem;
+  }
+
+  .panel {
+    padding: 0.9rem;
+  }
+
+  fieldset.params {
+    padding: 0.75rem;
+  }
+
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.7rem;
+  }
+
+  .mode-field {
+    grid-column: auto;
+  }
+
+  .actions {
     flex-wrap: wrap;
   }
 
-  .col-progress,
-  table.files th:nth-child(5),
-  table.files td:nth-child(5) {
+  .actions > .button {
+    flex: 1 1 8rem;
+    justify-content: center;
+  }
+
+  .job-header {
+    display: block;
+  }
+
+  .job-title {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .job-title h2 {
+    flex: 1 1 12rem;
+  }
+
+  .job-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    margin-top: 0.8rem;
+  }
+
+  .job-actions .button {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+  }
+
+  .job-meta,
+  .job-error {
+    overflow-wrap: anywhere;
+  }
+
+  .job-body {
+    margin-top: 0.8rem;
+    padding-top: 0.8rem;
+  }
+
+  .upload {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .upload .button {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .upload-status {
+    grid-column: 1 / -1;
+  }
+
+  .params-editor {
+    padding: 0.75rem;
+  }
+
+  table.files,
+  table.files tbody {
+    display: block;
+    width: 100%;
+  }
+
+  table.files thead {
     display: none;
+  }
+
+  table.files tbody {
+    display: grid;
+    gap: 0.7rem;
+  }
+
+  table.files tr {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.55rem 0.65rem;
+    padding: 0.75rem;
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+
+  table.files td,
+  table.files tr:last-child td {
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  table.files td:nth-child(2) {
+    min-width: 0;
+  }
+
+  table.files td:nth-child(3) {
+    justify-self: end;
+  }
+
+  table.files .col-progress {
+    display: block;
+    grid-column: 2 / -1;
+    width: auto;
+    min-width: 0;
+  }
+
+  table.files td:nth-child(5) {
+    display: flex;
+    grid-column: 2 / -1;
+    flex-wrap: wrap;
+    gap: 0.2rem 0.85rem;
+  }
+
+  table.files td:nth-child(5) .file-detail {
+    display: inline;
+  }
+
+  table.files .col-actions {
+    grid-column: 1 / -1;
+    width: auto;
+  }
+
+  .file-name {
+    max-width: 100%;
+  }
+
+  .row-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.4rem;
+  }
+
+  .row-actions .button {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+  }
+
+  .overlay {
+    padding: 0.65rem;
+  }
+
+  .overlay-card {
+    width: 100%;
+    max-height: calc(100dvh - 1.3rem);
+  }
+
+  .overlay-card header {
+    padding: 0.7rem 0.8rem;
+  }
+
+  .log {
+    padding: 0.8rem;
+    font-size: 0.7rem;
+  }
+
+  .toasts {
+    right: 0.75rem;
+    bottom: 0.75rem;
+    max-width: calc(100vw - 1.5rem);
+  }
+}
+
+@media (max-width: 460px) {
+  .subtitle {
+    display: none;
+  }
+
+  .upload {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .upload-status {
+    grid-column: auto;
+  }
+
+  .progress-row {
+    gap: 0.5rem;
   }
 }

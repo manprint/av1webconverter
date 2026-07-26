@@ -183,7 +183,13 @@ function buildParamsEditor(job) {
 
   for (const field of PARAM_FIELDS) {
     const node = document.createElement("div");
-    node.className = field.type === "checkbox" ? "field checkbox" : "field";
+    node.className = [
+      "field",
+      field.type === "checkbox" ? "checkbox" : "",
+      field.key === "mode" ? "mode-field" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     if (field.mode) node.dataset.mode = field.mode;
 
     if (field.type === "select") {
