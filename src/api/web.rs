@@ -11,6 +11,7 @@ const INDEX_HTML: &str = include_str!("../web/index.html");
 const APP_JS: &str = include_str!("../web/app.js");
 const STYLE_CSS: &str = include_str!("../web/style.css");
 const FAVICON_SVG: &str = include_str!("../web/favicon.svg");
+const VERSION_PLACEHOLDER: &str = "{{APP_VERSION}}";
 
 pub fn router() -> Router<SharedState> {
     Router::new()
@@ -41,7 +42,18 @@ fn asset(content: &'static str, content_type: &'static str, cacheable: bool) -> 
 }
 
 async fn index() -> Response {
-    asset(INDEX_HTML, "text/html; charset=utf-8", false)
+    (
+        StatusCode::OK,
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
+        INDEX_HTML.replace(VERSION_PLACEHOLDER, env!("CARGO_PKG_VERSION")),
+    )
+        .into_response()
 }
 
 async fn app_js() -> Response {

@@ -88,6 +88,19 @@ code {
   gap: 0.75rem;
 }
 
+.brand-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
+.app-version {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
 .mark {
   display: grid;
   place-items: center;

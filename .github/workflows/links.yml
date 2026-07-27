@@ -1,0 +1,26 @@
+name: Link check
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+
+jobs:
+  links:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --no-progress
+            --verbose
+            --exclude '^http://(localhost|127\.0\.0\.1)'
+            './**/*.md'
+            './**/*.html'

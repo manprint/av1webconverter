@@ -62,6 +62,8 @@ async fn il_frontend_e_servito_dal_binario() {
     assert_eq!(index.status(), 200);
     let html = index.text().await.unwrap();
     assert!(html.contains("av1webconverter"));
+    assert!(html.contains(concat!("v", env!("CARGO_PKG_VERSION"))));
+    assert!(!html.contains("{{APP_VERSION}}"));
     assert!(html.contains("/app.js"));
 
     for (path, marker) in [("/app.js", "EventSource"), ("/style.css", "--accent")] {
