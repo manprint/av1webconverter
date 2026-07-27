@@ -21,6 +21,7 @@ jobs:
           args: >-
             --no-progress
             --verbose
+            --root-dir "$(pwd)/src/web"
             --exclude '^http://(localhost|127\.0\.0\.1)'
             './**/*.md'
             './**/*.html'
