@@ -39,24 +39,24 @@ parte SSH: ffmpeg viene eseguito nello stesso container del servizio.
 
 ## Avvio con Docker
 
-L'immagine finale prende i binari ffmpeg dall'immagine custom, che va costruita
-per prima (unica fonte di verità su versioni e checksum):
+Il push del tag Git `v1.0.0` esegue i workflow GitHub e pubblica l'immagine
+completa, frontend e FFmpeg inclusi, nel GitHub Container Registry:
 
 ```bash
-docker build -f Dockerfile.ffmpeg-svtav1 \
-  -t local/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 .
-
-docker build -t av1webconverter:latest .
+docker pull ghcr.io/manprint/av1webconverter:v1.0.0
 ```
 
-Con un tag già pubblicato su Docker Hub:
+Avvio con Compose (metodo consigliato):
 
 ```bash
-docker build --build-arg FFMPEG_IMAGE=utente/ffmpeg-svtav1:tag \
-  -t av1webconverter:latest .
+docker compose pull
+docker compose up -d
 ```
 
-Avvio:
+Il riferimento può essere sovrascritto, per esempio per provare una versione
+successiva, con `AV1WC_IMAGE=ghcr.io/manprint/av1webconverter:vX.Y.Z`.
+
+Avvio senza Compose:
 
 ```bash
 docker run -d --name av1webconverter \
@@ -65,7 +65,7 @@ docker run -d --name av1webconverter \
   -e AV1WC_AUTH_USERNAME=admin \
   -e AV1WC_AUTH_PASSWORD='una password robusta' \
   -e AV1WC_SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...' \
-  av1webconverter:latest
+  ghcr.io/manprint/av1webconverter:v1.0.0
 ```
 
 Il frontend è su <http://localhost:8080>. Dentro il volume `/data`:
@@ -84,7 +84,17 @@ cp config.example.toml config.toml   # poi modificare
 docker run -d -p 8080:8080 \
   -v "$PWD/av1-data:/data" \
   -v "$PWD/config.toml:/etc/av1webconverter/config.toml:ro" \
-  av1webconverter:latest
+  ghcr.io/manprint/av1webconverter:v1.0.0
+```
+
+Per costruire localmente invece di usare GHCR, creare prima la base FFmpeg e
+passarla al `Dockerfile` applicativo:
+
+```bash
+docker build -f Dockerfile.ffmpeg-svtav1 \
+  -t local/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 .
+docker build --build-arg FFMPEG_IMAGE=local/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 \
+  -t av1webconverter:local .
 ```
 
 ## Sviluppo locale

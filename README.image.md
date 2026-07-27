@@ -22,21 +22,17 @@ Il build esegue anche un encode minimo con `tune=5`, verifica SVT-AV1 4.2.0
 e controlla con due sorgenti identiche che il filtro `libvmaf` produca
 realmente un punteggio.
 
-## Pubblicazione su Docker Hub
+## Immagine pubblicata su GHCR
 
 ```bash
-docker login
-docker tag \
-  local/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 \
-  NOME_DOCKERHUB/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0
-docker push NOME_DOCKERHUB/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0
+docker pull ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0
 ```
 
-Il progetto non esegue alcun deploy automatico. Dopo il push, indicare allo
-script il riferimento pubblicato:
+Il workflow attivato dal tag `v1.0.0` pubblica automaticamente questa base
+prima dell'immagine applicativa. Per usarla negli script:
 
 ```bash
-FFMPEG_IMAGE=NOME_DOCKERHUB/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 \
+FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0 \
 ./execute_docker.sh
 ```
 
@@ -45,17 +41,17 @@ FFMPEG_IMAGE=NOME_DOCKERHUB/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 \
 Lo stesso riferimento immagine deve essere disponibile sull'host locale e su
 quello remoto. Il default
 `local/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0` è utile per i
-test locali; per una conversione reale usare il tag pubblicato su Docker Hub:
+test locali; per una conversione reale usare il tag pubblicato su GHCR:
 
 ```bash
-FFMPEG_IMAGE=NOME_DOCKERHUB/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 \
+FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0 \
 ./execute_docker.sh
 ```
 
 Gli output già esistenti vengono saltati. Per sovrascriverli:
 
 ```bash
-FFMPEG_IMAGE=NOME_DOCKERHUB/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 \
+FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0 \
 OVERWRITE=1 \
 ./execute_docker.sh
 ```
@@ -63,7 +59,7 @@ OVERWRITE=1 \
 I parametri principali sono configurabili senza modificare gli script:
 
 ```bash
-FFMPEG_IMAGE=NOME_DOCKERHUB/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 \
+FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0 \
 CRF=45 PRESET=5 SVTAV1_PARAMS=tune=5 \
 ./execute_docker.sh
 ```
@@ -84,14 +80,14 @@ Per convertire tutti gli MP4 della directory scegliendo la dimensione finale
 di ciascun file:
 
 ```bash
-FFMPEG_IMAGE=NOME_DOCKERHUB/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 \
+FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0 \
 ./execute_docker_fixed_dim.sh 300
 ```
 
 Sono accettati sia `300` sia `300MB`. Per un singolo file:
 
 ```bash
-FFMPEG_IMAGE=NOME_DOCKERHUB/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 \
+FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0 \
 ./start_av1_docker_fixed_dim.sh film.mp4 300
 ```
 

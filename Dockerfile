@@ -9,10 +9,10 @@
 #
 #   docker build -f Dockerfile.ffmpeg-svtav1 \
 #     -t local/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 .
-#   docker build -t av1webconverter:latest .
+#   docker build -t av1webconverter:local .
 #
-# Per usare un tag pubblicato su Docker Hub:
-#   docker build --build-arg FFMPEG_IMAGE=utente/ffmpeg-svtav1:tag -t av1webconverter:latest .
+# Per usare la base pubblicata dal workflow su GHCR:
+#   docker build --build-arg FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0 -t av1webconverter:local .
 
 ARG FFMPEG_IMAGE=local/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0
 ARG RUST_IMAGE=rust:1.96-bookworm

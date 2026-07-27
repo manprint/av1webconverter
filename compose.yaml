@@ -1,27 +1,20 @@
 # Compose di produzione per av1webconverter.
 #
 # Avvio:
-#   docker compose up -d --build
+#   docker compose pull
+#   docker compose up -d
 #
 # Per usare un UID/GID diverso dal default:
-#   PUID=1500 PGID=1500 docker compose up -d --build
+#   PUID=1500 PGID=1500 docker compose up -d
 #
 # Prima di esporre il servizio, impostare almeno AV1WC_AUTH_PASSWORD con una
 # password robusta (tramite shell o file .env). I valori ${VAR:-default}
 # permettono di sovrascrivere ogni impostazione senza modificare questo file.
 
 x-app-image: &app-image
-  # Immagine finale. Può essere un riferimento di registry già pubblicato.
-  image: "${AV1WC_IMAGE:-av1webconverter:latest}"
-  build:
-    context: .
-    dockerfile: Dockerfile
-    args:
-      # Immagine FFmpeg 8.1.2/SVT-AV1 4.2.0 costruita separatamente con
-      # Dockerfile.ffmpeg-svtav1; può essere anche un riferimento di registry.
-      FFMPEG_IMAGE: "${FFMPEG_IMAGE:-local/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0}"
-      # Immagine usata esclusivamente per compilare il binario Rust.
-      RUST_IMAGE: "${RUST_IMAGE:-rust:1.96-bookworm}"
+  # Immagine pubblicata dal workflow GitHub per il tag v1.0.0.
+  image: "${AV1WC_IMAGE:-ghcr.io/manprint/av1webconverter:v1.0.0}"
+  pull_policy: always
 
 services:
   # Prepara il bind mount con la proprietà richiesta. Il servizio termina prima

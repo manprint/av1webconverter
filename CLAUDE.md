@@ -23,11 +23,11 @@ cargo clippy --all-targets         # lint (kept warning-free)
 
 E2E tests spawn a real server on an ephemeral port and encode real video via the **system** ffmpeg. They self-skip when `libsvtav1` is absent (`common::ffmpeg_with_svtav1()`), so a machine without the codec still passes the suite. Test config in `tests/common/mod.rs` overrides `svtav1_params` to `tune=0` because system SVT-AV1 is often 1.x, which rejects `tune=5`; production defaults stay `tune=5`.
 
-Docker (ffmpeg image must be built first — it is the only source of truth for versions and checksums):
+Production image published by the `v1.0.0` Git tag workflow:
 
 ```bash
-docker build -f Dockerfile.ffmpeg-svtav1 -t local/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 .
-docker build -t av1webconverter:latest .
+docker pull ghcr.io/manprint/av1webconverter:v1.0.0
+docker compose up -d
 ```
 
 ## Architecture
