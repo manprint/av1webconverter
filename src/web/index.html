@@ -38,6 +38,11 @@
             <input id="job-concurrency" name="concurrency" type="number" min="1" max="64" />
             <small>1 = i file vengono convertiti in sequenza.</small>
           </div>
+          <div class="field">
+            <label for="param-suffix">Suffix</label>
+            <input id="param-suffix" name="suffix" type="text" maxlength="128" pattern="[A-Za-z0-9._-]*" />
+            <small>Aggiunto al nome del file prima di <code>.mp4</code>.</small>
+          </div>
 
           <fieldset class="params">
             <legend>Parametri di conversione</legend>

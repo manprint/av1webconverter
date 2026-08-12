@@ -128,6 +128,8 @@ function readParams(root) {
       params[field.key] = input.value;
     }
   }
+  const suffix = root.querySelector('[name="suffix"]');
+  if (suffix) params.suffix = suffix.value;
   // I campi opzionali vuoti restano nulli; gli altri tornano al default.
   const fallback = paramsFromDefaults();
   for (const field of PARAM_FIELDS) {
@@ -151,6 +153,8 @@ function writeParams(root, params) {
       input.value = value === null || value === undefined ? "" : value;
     }
   }
+  const suffix = root.querySelector('[name="suffix"]');
+  if (suffix) suffix.value = params.suffix ?? "";
   applyModeVisibility(root);
 }
 
@@ -180,6 +184,14 @@ function buildParamsEditor(job) {
     <input type="number" name="concurrency" min="1" max="64" value="${job.concurrency}" />
     <small>1 = i file vengono convertiti in sequenza.</small>`;
   grid.appendChild(concurrency);
+
+  const suffix = document.createElement("div");
+  suffix.className = "field";
+  suffix.innerHTML = `
+    <label>Suffix</label>
+    <input type="text" name="suffix" maxlength="128" pattern="[A-Za-z0-9._-]*" />
+    <small>Aggiunto al nome del file prima di <code>.mp4</code>.</small>`;
+  grid.appendChild(suffix);
 
   for (const field of PARAM_FIELDS) {
     const node = document.createElement("div");

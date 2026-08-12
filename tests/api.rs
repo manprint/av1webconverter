@@ -91,6 +91,7 @@ async fn i_default_arrivano_dalla_configurazione() {
         .await
         .unwrap();
     assert_eq!(body["params"]["crf"], 33);
+    assert_eq!(body["params"]["suffix"], "_av1");
     assert_eq!(body["concurrency"], 2);
     assert!(body["allowed_extensions"]
         .as_array()
@@ -119,6 +120,7 @@ async fn creazione_job_usa_i_default_e_crea_le_cartelle() {
     assert_eq!(job["name"], "serie tv");
     assert_eq!(job["status"], "pending");
     assert_eq!(job["params"]["crf"], 50);
+    assert_eq!(job["params"]["suffix"], "_av1");
     assert_eq!(job["overall_progress"], 0.0);
 
     let job_id = job["id"].as_str().unwrap();
@@ -136,6 +138,7 @@ async fn creazione_job_rifiuta_input_non_valido() {
         json!({ "name": "x", "params": { "crf": 99 } }),
         json!({ "name": "x", "params": { "mode": "target_size" } }),
         json!({ "name": "x", "params": { "svtav1_params": "tune=5; rm -rf /" } }),
+        json!({ "name": "x", "params": { "suffix": "../fuori" } }),
     ];
     for case in cases {
         let response = server
@@ -161,7 +164,7 @@ async fn modifica_dei_parametri_del_job() {
         .json(&json!({
             "name": "rinominato",
             "concurrency": 3,
-            "params": { "crf": 40, "preset": 8, "scale_height": 720 }
+            "params": { "crf": 40, "preset": 8, "scale_height": 720, "suffix": "_web" }
         }))
         .send()
         .await
@@ -174,6 +177,7 @@ async fn modifica_dei_parametri_del_job() {
     assert_eq!(updated["concurrency"], 3);
     assert_eq!(updated["params"]["crf"], 40);
     assert_eq!(updated["params"]["scale_height"], 720);
+    assert_eq!(updated["params"]["suffix"], "_web");
 
     // La modifica è persistita anche dopo una rilettura.
     let reread: serde_json::Value = server
@@ -186,6 +190,7 @@ async fn modifica_dei_parametri_del_job() {
         .await
         .unwrap();
     assert_eq!(reread["params"]["preset"], 8);
+    assert_eq!(reread["params"]["suffix"], "_web");
 }
 
 #[tokio::test]

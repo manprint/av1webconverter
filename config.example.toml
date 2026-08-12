@@ -75,6 +75,8 @@ pixel_format = "yuv420p10le"
 keyint = 240                # distanza massima fra keyframe (-g)
 # cpus = 4                  # thread concessi a ffmpeg; se omesso decide ffmpeg
 progress_interval = 5.0     # AV1WC_PROGRESS_INTERVAL — aggiornamento del progresso, in secondi
+# Aggiunto al nome dell'output prima di .mp4; il frontend può cambiarlo per job.
+suffix = "_av1"
 
 # Solo in modalità target_size:
 # target_size_mb = 300.0    # dimensione finale desiderata

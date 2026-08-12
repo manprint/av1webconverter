@@ -353,14 +353,14 @@ pub fn unique_stored_name(original_name: &str, existing: &[String]) -> String {
     candidate
 }
 
-/// Nome dell'output convertito, come negli script di riferimento.
-pub fn output_name_for(stored_name: &str) -> String {
+/// Nome dell'output convertito, con il suffisso scelto per il job.
+pub fn output_name_for(stored_name: &str, suffix: &str) -> String {
     let stem = stored_name
         .rsplit_once('.')
         .map(|(stem, _)| stem)
         .filter(|stem| !stem.is_empty())
         .unwrap_or(stored_name);
-    format!("{stem}_av1.mp4")
+    format!("{stem}{suffix}.mp4")
 }
 
 pub async fn remove_dir_if_present(path: &Path) {
@@ -412,12 +412,15 @@ mod tests {
     }
 
     #[test]
-    fn nome_di_output_con_suffisso_av1() {
-        assert_eq!(output_name_for("film.mp4"), "film_av1.mp4");
-        assert_eq!(output_name_for("film.parte.1.mkv"), "film.parte.1_av1.mp4");
+    fn nome_di_output_con_suffisso_configurabile() {
+        assert_eq!(output_name_for("film.mp4", "_av1"), "film_av1.mp4");
         assert_eq!(
-            output_name_for("senzaestensione"),
-            "senzaestensione_av1.mp4"
+            output_name_for("film.parte.1.mkv", "_convertito"),
+            "film.parte.1_convertito.mp4"
+        );
+        assert_eq!(
+            output_name_for("senzaestensione", ""),
+            "senzaestensione.mp4"
         );
     }
 

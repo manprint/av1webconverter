@@ -44,7 +44,7 @@ async fn conversione_crf_dall_upload_al_download() {
     let job: serde_json::Value = server
         .client
         .post(server.url("/api/jobs"))
-        .json(&json!({ "name": "conversione crf" }))
+        .json(&json!({ "name": "conversione crf", "params": { "suffix": "_web" } }))
         .send()
         .await
         .unwrap()
@@ -92,7 +92,7 @@ async fn conversione_crf_dall_upload_al_download() {
     assert_eq!(file["progress"]["percent"], 100.0);
 
     // L'output è dove lo aspettiamo e contiene davvero AV1.
-    let output_path = server.output_dir.join(&job_id).join("sorgente_av1.mp4");
+    let output_path = server.output_dir.join(&job_id).join("sorgente_web.mp4");
     assert!(
         output_path.exists(),
         "output assente: {}",
@@ -135,7 +135,7 @@ async fn conversione_crf_dall_upload_al_download() {
         .unwrap()
         .to_str()
         .unwrap()
-        .contains("sorgente_av1.mp4"));
+        .contains("sorgente_web.mp4"));
     assert!(!response.bytes().await.unwrap().is_empty());
 
     // Download dell'intero job come ZIP.
@@ -162,7 +162,7 @@ async fn conversione_crf_dall_upload_al_download() {
     let archive = zip::ZipArchive::new(std::io::Cursor::new(selection.to_vec()))
         .expect("archivio ZIP valido");
     assert_eq!(archive.len(), 1);
-    assert_eq!(archive.file_names().next().unwrap(), "sorgente_av1.mp4");
+    assert_eq!(archive.file_names().next().unwrap(), "sorgente_web.mp4");
 
     // La cartella temporanea non deve accumulare residui.
     let temp_entries: Vec<_> = std::fs::read_dir(server.temp.path().join("data/tmp"))

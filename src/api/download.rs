@@ -38,7 +38,7 @@ pub async fn single_file(
         .clone()
         .ok_or_else(|| ApiError::Conflict("il file non è ancora stato convertito".into()))?;
 
-    let download_name = crate::state::output_name_for(&file.stored_name);
+    let download_name = crate::state::output_name_for(&file.stored_name, &view.job.params.suffix);
     stream_file(output_path, &download_name, "video/mp4", false).await
 }
 
@@ -74,7 +74,7 @@ async fn build_zip(state: SharedState, job_id: Uuid, file_ids: Vec<Uuid>) -> Api
         };
         // Nomi duplicati dentro lo ZIP renderebbero l'archivio ambiguo.
         let name = crate::state::unique_stored_name(
-            &crate::state::output_name_for(&file.stored_name),
+            &crate::state::output_name_for(&file.stored_name, &view.job.params.suffix),
             &used_names,
         );
         used_names.push(name.clone());

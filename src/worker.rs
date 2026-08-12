@@ -184,7 +184,7 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
     tokio::fs::create_dir_all(&output_dir)
         .await
         .context("creazione cartella di output del job")?;
-    let output_path = output_dir.join(output_name_for(&stored_name));
+    let output_path = output_dir.join(output_name_for(&stored_name, &params.suffix));
 
     // Come negli script: un output già presente non viene sovrascritto.
     if output_path.exists() && !params.overwrite {

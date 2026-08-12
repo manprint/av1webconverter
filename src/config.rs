@@ -43,6 +43,8 @@ pub struct EncodingParams {
     pub target_size_mb: Option<f64>,
     /// Percentuale del target riservata all'overhead del contenitore MP4.
     pub size_margin_percent: f64,
+    /// Testo aggiunto al nome del file convertito, prima dell'estensione MP4.
+    pub suffix: String,
     /// Se falso, un output già presente viene saltato invece che riscritto.
     pub overwrite: bool,
 }
@@ -62,6 +64,7 @@ impl Default for EncodingParams {
             progress_interval: 5.0,
             target_size_mb: None,
             size_margin_percent: 1.0,
+            suffix: "_av1".to_string(),
             overwrite: false,
         }
     }
@@ -104,6 +107,12 @@ impl EncodingParams {
         }
         if !(0.0..=50.0).contains(&self.size_margin_percent) {
             return Err("size_margin_percent deve essere compreso fra 0 e 50".into());
+        }
+        if !is_safe_output_suffix(&self.suffix) {
+            return Err(
+                "suffix può contenere al massimo 128 caratteri ASCII tra lettere, numeri, punto, trattino e underscore"
+                    .into(),
+            );
         }
         if self.mode == EncodingMode::TargetSize {
             match self.target_size_mb {
@@ -155,6 +164,14 @@ fn is_safe_ffmpeg_token(value: &str) -> bool {
         && value
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || "=:,.-_+/ ".contains(c))
+}
+
+/// Il suffisso diventa parte di un nome file, quindi non può introdurre percorsi.
+fn is_safe_output_suffix(value: &str) -> bool {
+    value.len() <= 128
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -518,6 +535,16 @@ mod tests {
             svtav1_params: "tune=5; rm -rf /".into(),
             ..Default::default()
         };
+        assert!(params.validate().is_err());
+    }
+
+    #[test]
+    fn suffix_di_output_e_validato() {
+        let mut params = EncodingParams::default();
+        assert_eq!(params.suffix, "_av1");
+        params.suffix = "_convertito-v2.1".into();
+        assert!(params.validate().is_ok());
+        params.suffix = "../fuori".into();
         assert!(params.validate().is_err());
     }
 

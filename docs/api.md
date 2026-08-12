@@ -86,12 +86,16 @@ Elenco dei job, dal più recente.
 ### `POST /api/jobs`
 
 ```json
-{ "name": "Serie TV", "params": { "crf": 40 }, "concurrency": 2 }
+{ "name": "Serie TV", "params": { "crf": 40, "suffix": "_av1" }, "concurrency": 2 }
 ```
 
 `params` e `concurrency` sono opzionali: se assenti si usano i default del
 backend. I campi di `params` omessi restano al loro default. Risponde con la
 `JobView` creata.
+
+`params.suffix` viene aggiunto allo stem di ogni output, prima di `.mp4`;
+il default è `_av1`. Può contenere lettere e numeri ASCII, `.`, `-` e `_`
+(massimo 128 caratteri).
 
 ### `GET /api/jobs/{job_id}`
 
@@ -100,7 +104,7 @@ Un singolo job.
 ### `PATCH /api/jobs/{job_id}`
 
 ```json
-{ "name": "nuovo nome", "params": { "crf": 45, "preset": 6 }, "concurrency": 3 }
+{ "name": "nuovo nome", "params": { "crf": 45, "preset": 6, "suffix": "_web" }, "concurrency": 3 }
 ```
 
 Tutti i campi sono opzionali. `params` e `concurrency` non sono modificabili
