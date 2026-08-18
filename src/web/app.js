@@ -24,7 +24,24 @@ const PARAM_FIELDS = [
   { key: "target_size_mb", label: "Dimensione target (MB)", type: "number", min: 1, step: 1, mode: "target_size" },
   { key: "size_margin_percent", label: "Margine overhead (%)", type: "number", min: 0, max: 50, step: 0.1, mode: "target_size" },
   { key: "preset", label: "Preset", type: "number", min: 0, max: 13 },
-  { key: "scale_height", label: "Altezza massima (px)", type: "number", min: 16, max: 4320 },
+  {
+    key: "scale_height",
+    label: "Altezza massima",
+    type: "select",
+    numeric: true,
+    options: [
+      ["0", "Dimensione originale"],
+      ["144", "144px"],
+      ["240", "240px"],
+      ["320", "320px"],
+      ["480", "480px"],
+      ["720", "720px"],
+      ["1080", "1080px"],
+      ["1440", "1440px"],
+      ["2160", "2160px"],
+    ],
+    dynamicOptionLabel: (value) => `${value}px`,
+  },
   { key: "audio_bitrate", label: "Bitrate audio", type: "text" },
   { key: "svtav1_params", label: "svtav1-params", type: "text", mode: "crf" },
   { key: "pixel_format", label: "Formato pixel", type: "text" },
@@ -122,7 +139,8 @@ function readParams(root) {
     if (!input) continue;
     if (field.type === "checkbox") {
       params[field.key] = input.checked;
-    } else if (field.type === "number") {
+    } else if (field.type === "number" || field.numeric) {
+      // I select numerici devono partire come numero: serde rifiuta "480" per un u32.
       params[field.key] = input.value === "" ? null : Number(input.value);
     } else {
       params[field.key] = input.value;
@@ -142,6 +160,19 @@ function readParams(root) {
   return params;
 }
 
+/** Conserva un valore fuori dalle scelte fisse aggiungendo un'opzione dedicata. */
+function ensureOption(select, value, label) {
+  if (value === null || value === undefined || select.tagName !== "SELECT") return;
+  const wanted = String(value);
+  if ([...select.options].some((option) => option.value === wanted)) return;
+  const option = document.createElement("option");
+  option.value = wanted;
+  option.textContent = label(value);
+  // Inserimento in ordine numerico, così la tendina resta leggibile.
+  const next = [...select.options].find((existing) => Number(existing.value) > Number(wanted));
+  select.insertBefore(option, next ?? null);
+}
+
 function writeParams(root, params) {
   for (const field of PARAM_FIELDS) {
     const input = root.querySelector(`[name="${field.key}"]`);
@@ -150,6 +181,7 @@ function writeParams(root, params) {
     if (field.type === "checkbox") {
       input.checked = Boolean(value);
     } else {
+      if (field.dynamicOptionLabel) ensureOption(input, value, field.dynamicOptionLabel);
       input.value = value === null || value === undefined ? "" : value;
     }
   }
@@ -274,7 +306,9 @@ function renderJob(job) {
     job.params.mode === "target_size"
       ? `target ${job.params.target_size_mb ?? "?"} MB · preset ${job.params.preset}`
       : `CRF ${job.params.crf} · preset ${job.params.preset}`,
-    `altezza ${job.params.scale_height}px`,
+    job.params.scale_height === 0
+      ? "dimensione originale"
+      : `altezza ${job.params.scale_height}px`,
     `creato ${formatDateTime(job.created_at)}`,
   ]
     .filter(Boolean)

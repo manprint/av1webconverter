@@ -71,8 +71,18 @@
                 <input id="param-preset" name="preset" type="number" min="0" max="13" />
               </div>
               <div class="field">
-                <label for="param-scale-height">Altezza massima (px)</label>
-                <input id="param-scale-height" name="scale_height" type="number" min="16" max="4320" />
+                <label for="param-scale-height">Altezza massima</label>
+                <select id="param-scale-height" name="scale_height">
+                  <option value="0">Dimensione originale</option>
+                  <option value="144">144px</option>
+                  <option value="240">240px</option>
+                  <option value="320">320px</option>
+                  <option value="480">480px</option>
+                  <option value="720">720px</option>
+                  <option value="1080">1080px</option>
+                  <option value="1440">1440px</option>
+                  <option value="2160">2160px</option>
+                </select>
               </div>
               <div class="field">
                 <label for="param-audio-bitrate">Bitrate audio</label>

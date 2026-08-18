@@ -17,7 +17,8 @@ parte SSH: ffmpeg viene eseguito nello stesso container del servizio.
 - Job di conversione con nome, ognuno contenitore logico di più file.
 - Upload di file singoli o di cartelle intere.
 - Parametri di conversione per job: default dal file di configurazione,
-  sovrascrivibili dal frontend.
+  sovrascrivibili dal frontend; l'altezza massima si sceglie da un menu con
+  valori predefiniti, inclusa `Dimensione originale`.
 - Conversione **in sequenza** dentro il job (1 conversione simultanea per
   default, valore configurabile e modificabile per job).
 - Progresso per file e progresso totale del job, pesato sulla dimensione dei
@@ -134,7 +135,7 @@ poter configurare il container senza montare un TOML. Le più usate:
 | `AV1WC_DEFAULT_CONCURRENCY`| conversioni simultanee per job                     |
 | `AV1WC_CRF`                | CRF di default                                     |
 | `AV1WC_PRESET`             | preset SVT-AV1 di default                          |
-| `AV1WC_SCALE_HEIGHT`       | altezza massima dell'output                        |
+| `AV1WC_SCALE_HEIGHT`       | altezza massima dell'output; `0` = dimensione originale |
 | `AV1WC_SVTAV1_PARAMS`      | `-svtav1-params` di default                        |
 | `AV1WC_LOG_LEVEL`          | filtro dei log applicativi                         |
 
@@ -162,7 +163,17 @@ Default rilevanti, ereditati dalle misure documentate in `README.image.md`:
 - `enable-qm=1:qm-min=0` resta escluso: nei test riduceva sia SSIM sia PSNR.
 - Il ridimensionamento limita l'altezza a `scale_height` mantenendo l'aspetto
   visivo del sorgente e normalizzando a pixel quadrati (SAR 1:1), per evitare DAR
-  errati con sorgenti anamorfiche.
+  errati con sorgenti anamorfiche. Con `scale_height = 0` non viene applicato
+  alcun ridimensionamento: il video conserva dimensione e rapporto dei pixel del
+  sorgente. Il default è `480`; per usare la dimensione originale, impostare
+  `scale_height = 0` nel file TOML oppure `AV1WC_SCALE_HEIGHT=0`.
+- Nell'interfaccia sono disponibili `Dimensione originale`, 144, 240, 320, 480,
+  720, 1080, 1440 e 2160 px; il default è 480px. L'API accetta anche altezze
+  diverse da quelle del menu, fra 16 e 4320. Se un job usa una di queste altezze,
+  l'interfaccia la mostra come voce aggiuntiva e la conserva quando i parametri
+  vengono salvati.
+- La scelta `Dimensione originale` può produrre file più grandi e richiedere più
+  tempo, perché l'altezza del sorgente non viene ridotta.
 
 ## Log
 

@@ -97,6 +97,11 @@ backend. I campi di `params` omessi restano al loro default. Risponde con la
 il default è `_av1`. Può contenere lettere e numeri ASCII, `.`, `-` e `_`
 (massimo 128 caratteri).
 
+`params.scale_height` è l'altezza massima dell'output in pixel: `0` significa
+dimensione originale, cioè nessun ridimensionamento e rapporto dei pixel del
+sorgente conservato. Sono ammessi `0` e i valori fra 16 e 4320; l'interfaccia
+web propone un sottoinsieme di valori comuni, l'API accetta tutto l'intervallo.
+
 ### `GET /api/jobs/{job_id}`
 
 Un singolo job.

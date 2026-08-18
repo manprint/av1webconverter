@@ -24,7 +24,9 @@ pub enum EncodingMode {
 #[serde(default, deny_unknown_fields)]
 pub struct EncodingParams {
     pub mode: EncodingMode,
-    /// Altezza massima dell'output; l'aspetto viene mantenuto e il SAR forzato a 1:1.
+    /// Altezza massima dell'output; l'aspetto viene mantenuto e il SAR forzato
+    /// a 1:1. Il valore `0` significa dimensione originale: nessun
+    /// ridimensionamento e SAR del sorgente intatto.
     pub scale_height: u32,
     /// Constant Rate Factor, usato solo in modalità `crf`.
     pub crf: u8,
@@ -73,8 +75,12 @@ impl Default for EncodingParams {
 impl EncodingParams {
     /// Verifica i parametri prima di accettarli da config o dal frontend.
     pub fn validate(&self) -> Result<(), String> {
-        if self.scale_height < 16 || self.scale_height > 4320 {
-            return Err("scale_height deve essere compreso fra 16 e 4320".into());
+        // 0 è la sentinella di "dimensione originale": nessun ridimensionamento.
+        if self.scale_height != 0 && (self.scale_height < 16 || self.scale_height > 4320) {
+            return Err(
+                "scale_height deve essere 0 (dimensione originale) oppure compreso fra 16 e 4320"
+                    .into(),
+            );
         }
         if self.crf > 63 {
             return Err("crf deve essere compreso fra 0 e 63".into());
@@ -546,6 +552,41 @@ mod tests {
         assert!(params.validate().is_ok());
         params.suffix = "../fuori".into();
         assert!(params.validate().is_err());
+    }
+
+    #[test]
+    fn altezza_zero_significa_dimensione_originale() {
+        let params = EncodingParams {
+            scale_height: 0,
+            ..Default::default()
+        };
+        assert!(params.validate().is_ok());
+    }
+
+    #[test]
+    fn altezza_fra_uno_e_quindici_e_rifiutata() {
+        let params = EncodingParams {
+            scale_height: 8,
+            ..Default::default()
+        };
+        let error = params.validate().expect_err("8 deve essere rifiutato");
+        assert!(error.contains("0 (dimensione originale)"));
+    }
+
+    #[test]
+    fn altezza_oltre_il_massimo_e_rifiutata() {
+        let params = EncodingParams {
+            scale_height: 4321,
+            ..Default::default()
+        };
+        assert!(params.validate().is_err());
+    }
+
+    #[test]
+    fn altezza_zero_da_ambiente_e_accettata() {
+        let mut config = Config::default();
+        config.encoding.scale_height = 0;
+        assert!(config.validate().is_ok());
     }
 
     #[test]

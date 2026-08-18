@@ -136,6 +136,8 @@ async fn creazione_job_rifiuta_input_non_valido() {
         json!({ "name": "" }),
         json!({ "name": "x", "concurrency": 0 }),
         json!({ "name": "x", "params": { "crf": 99 } }),
+        json!({ "name": "x", "params": { "scale_height": 8 } }),
+        json!({ "name": "x", "params": { "scale_height": 5000 } }),
         json!({ "name": "x", "params": { "mode": "target_size" } }),
         json!({ "name": "x", "params": { "svtav1_params": "tune=5; rm -rf /" } }),
         json!({ "name": "x", "params": { "suffix": "../fuori" } }),
@@ -191,6 +193,45 @@ async fn modifica_dei_parametri_del_job() {
         .unwrap();
     assert_eq!(reread["params"]["preset"], 8);
     assert_eq!(reread["params"]["suffix"], "_web");
+}
+
+#[tokio::test]
+async fn la_dimensione_originale_e_accettata_dall_api() {
+    let server = common::start().await;
+    let job = create_job(&server, "originale").await;
+    let job_id = job["id"].as_str().unwrap();
+
+    let response = server
+        .client
+        .patch(server.url(&format!("/api/jobs/{job_id}")))
+        .json(&json!({ "params": { "scale_height": 0 } }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    let updated: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(updated["params"]["scale_height"], 0);
+}
+
+#[tokio::test]
+async fn un_altezza_come_stringa_viene_rifiutata() {
+    let server = common::start().await;
+
+    let response = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({ "name": "x", "params": { "scale_height": "480" } }))
+        .send()
+        .await
+        .unwrap();
+
+    // Il rifiuto arriva dall'estrattore Json prima della validazione.
+    let status = response.status();
+    assert!(
+        status.is_client_error(),
+        "un'altezza stringa deve essere rifiutata, ricevuto {status}"
+    );
 }
 
 #[tokio::test]

@@ -35,9 +35,16 @@ pub enum RunOutcome {
 /// build FFmpeg 8.1.2 usata dall'immagine applicativa.
 ///
 /// La virgola dentro `min()` va protetta, perché la virgola separa i filtri.
-pub fn scale_filter(scale_height: u32) -> String {
+///
+/// `scale_height == 0` significa dimensione originale: non serve alcun
+/// filtro, quindi `-vf` non viene passato e il SAR del sorgente resta
+/// intatto.
+pub fn scale_filter(scale_height: u32) -> Option<String> {
+    if scale_height == 0 {
+        return None;
+    }
     let height = format!("trunc(min({scale_height}\\,ih)/2)*2");
-    format!("scale=-2:{height}:reset_sar=1")
+    Some(format!("scale=-2:{height}:reset_sar=1"))
 }
 
 fn common_input_args(params: &EncodingParams, input: &Path) -> Vec<OsString> {
@@ -63,11 +70,13 @@ fn common_input_args(params: &EncodingParams, input: &Path) -> Vec<OsString> {
 }
 
 fn video_encoder_args(params: &EncodingParams) -> Vec<OsString> {
-    vec![
-        "-c:v".into(),
-        "libsvtav1".into(),
-        "-vf".into(),
-        scale_filter(params.scale_height).into(),
+    let mut args: Vec<OsString> = vec!["-c:v".into(), "libsvtav1".into()];
+    // Nessun filtro in modalità dimensione originale: -vf va omesso, non svuotato.
+    if let Some(filter) = scale_filter(params.scale_height) {
+        args.push("-vf".into());
+        args.push(filter.into());
+    }
+    args.extend([
         "-preset".into(),
         params.preset.to_string().into(),
         "-svtav1-params".into(),
@@ -76,7 +85,8 @@ fn video_encoder_args(params: &EncodingParams) -> Vec<OsString> {
         params.keyint.to_string().into(),
         "-pix_fmt".into(),
         params.pixel_format.clone().into(),
-    ]
+    ]);
+    args
 }
 
 /// Codifica a qualità costante, un solo passaggio.
@@ -344,17 +354,58 @@ mod tests {
     #[test]
     fn filtro_di_scala_calcola_la_larghezza_dal_dar() {
         assert_eq!(
-            scale_filter(480),
+            scale_filter(480).unwrap(),
             "scale=-2:trunc(min(480\\,ih)/2)*2:reset_sar=1"
         );
     }
 
     #[test]
     fn filtro_di_scala_resetta_il_sar() {
-        let filter = scale_filter(720);
+        let filter = scale_filter(720).unwrap();
         assert!(filter.ends_with(":reset_sar=1"));
         assert!(filter.starts_with("scale=-2:"));
         assert!(filter.contains("min(720\\,ih)"));
+    }
+
+    #[test]
+    fn filtro_di_scala_assente_con_altezza_originale() {
+        assert_eq!(scale_filter(0), None);
+    }
+
+    #[test]
+    fn comando_crf_omette_vf_con_altezza_originale() {
+        let params = EncodingParams {
+            scale_height: 0,
+            ..EncodingParams::default()
+        };
+        let args = as_strings(&build_crf_args(
+            &params,
+            Path::new("/in/a.mp4"),
+            Path::new("/tmp/a.mkv"),
+        ));
+        assert!(!args.iter().any(|arg| arg == "-vf"));
+        assert!(!args.iter().any(|arg| arg.contains("scale=-2")));
+        assert!(args.join(" ").contains("-c:v libsvtav1 -preset 1"));
+    }
+
+    #[test]
+    fn comando_due_passaggi_omette_vf_con_altezza_originale() {
+        let params = EncodingParams {
+            mode: EncodingMode::TargetSize,
+            scale_height: 0,
+            target_size_mb: Some(300.0),
+            ..EncodingParams::default()
+        };
+        let args = as_strings(&build_two_pass_args(
+            &params,
+            Path::new("/in/a.mp4"),
+            Path::new("/tmp/a.mkv"),
+            Path::new("/tmp/a.log"),
+            1_000_000,
+            1,
+        ));
+        assert!(!args.iter().any(|arg| arg == "-vf"));
+        assert!(!args.iter().any(|arg| arg.contains("scale=-2")));
     }
 
     #[test]

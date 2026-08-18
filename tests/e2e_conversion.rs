@@ -533,6 +533,66 @@ async fn un_sorgente_anamorfico_conserva_l_aspetto_visivo() {
 }
 
 #[tokio::test]
+async fn la_dimensione_originale_non_ridimensiona() {
+    if !common::ffmpeg_with_svtav1() {
+        eprintln!("ffmpeg con SVT-AV1 non disponibile: test saltato");
+        return;
+    }
+
+    // 0 = dimensione originale: nessun -vf, quindi nemmeno normalizzazione del SAR.
+    let server = common::start_with(|config| config.encoding.scale_height = 0).await;
+    let source = server.temp.path().join("anamorfico.mp4");
+    common::make_anamorphic_video(&source, 2);
+
+    let (source_width, source_height, source_sar, source_dar) = common::video_geometry(&source);
+    assert_eq!((source_width, source_height), (720, 576));
+    assert_ne!(
+        source_sar, "1:1",
+        "il sorgente deve avere pixel non quadrati"
+    );
+
+    let job: serde_json::Value = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({ "name": "originale" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    assert_eq!(job["params"]["scale_height"], 0);
+    upload_file(&server, &job_id, "anamorfico.mp4", &source).await;
+
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/start")))
+        .send()
+        .await
+        .unwrap();
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "{job}");
+
+    let output_path = server.output_dir.join(&job_id).join("anamorfico_av1.mp4");
+    let (width, height, sar, dar) = common::video_geometry(&output_path);
+
+    assert_eq!(
+        (width, height),
+        (source_width, source_height),
+        "la dimensione originale non deve essere toccata"
+    );
+    assert_eq!(sar, source_sar, "il SAR del sorgente deve restare intatto");
+    let source_ratio = common::ratio(&source_dar);
+    let output_ratio = common::ratio(&dar);
+    assert!(
+        (output_ratio - source_ratio).abs() < 0.01,
+        "aspetto visivo alterato: {source_dar} -> {dar}"
+    );
+    assert_eq!(common::video_codec(&output_path), "av1");
+}
+
+#[tokio::test]
 async fn un_sorgente_non_valido_fa_fallire_solo_il_suo_file() {
     if !common::ffmpeg_with_svtav1() {
         eprintln!("ffmpeg con SVT-AV1 e reset_sar non disponibile: test saltato");
