@@ -13,7 +13,7 @@ use futures::StreamExt;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::config::EncodingMode;
+use crate::config::{EncodingMode, EncodingParams};
 use crate::error::{ApiError, ApiResult};
 use crate::events::Event;
 use crate::ffmpeg::encode::{
@@ -21,8 +21,15 @@ use crate::ffmpeg::encode::{
     total_passes, FfmpegEvent, RunOutcome,
 };
 use crate::ffmpeg::probe::probe;
-use crate::ffmpeg::progress::{format_progress_line, format_size, ProgressParser};
-use crate::models::{FileStatus, Job, JobStatus};
+use crate::ffmpeg::progress::{format_clock, format_progress_line, format_size, ProgressParser};
+use crate::ffmpeg::vmaf::{
+    build_probe_args, build_vmaf_args, crf_da_testare, parse_vmaf_log, righe_riepilogo, scegli_crf,
+    segmenti_da_analizzare, SondaRequest, VmafRequest,
+};
+use crate::models::{
+    FileStatus, Job, JobStatus, RisultatoCrf, SegmentoAnalisiPersistito, VmafAnalysis,
+    VmafMeasurement,
+};
 use crate::state::{output_name_for, remove_file_if_present, JobHandle, SharedState};
 
 /// Avvia il worker del job in background.
@@ -207,6 +214,8 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
             Some(output_path),
             Some(size),
             None,
+            None,
+            None,
         )
         .await;
         return Ok(());
@@ -239,16 +248,77 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
     let temp_mkv = temp_dir.join(format!(".av1-{file_id}.mkv"));
     let temp_mp4 = temp_dir.join(format!(".av1-{file_id}.mp4"));
     let passlog = temp_dir.join(format!(".av1-{file_id}"));
-    let guard = TempFiles::new(vec![temp_mkv.clone(), temp_mp4.clone()], passlog.clone());
+    let vmaf_json = temp_dir.join(format!(".av1-{file_id}.vmaf.json"));
+    let sonda_mkv = temp_dir.join(format!(".av1-{file_id}.sonda.mkv"));
+    let sonda_vmaf_json = temp_dir.join(format!(".av1-{file_id}.sonda.vmaf.json"));
+    let guard = TempFiles::new(
+        vec![
+            temp_mkv.clone(),
+            temp_mp4.clone(),
+            vmaf_json.clone(),
+            sonda_mkv.clone(),
+            sonda_vmaf_json.clone(),
+        ],
+        passlog.clone(),
+    );
 
     let passes = total_passes(params.mode);
+    let segmenti = if params.mode == EncodingMode::VmafAnalysis {
+        segmenti_da_analizzare(
+            info.duration_seconds,
+            params.vmaf_segments,
+            file_id.as_bytes(),
+        )
+    } else {
+        Vec::new()
+    };
+    let crf_candidati = if params.mode == EncodingMode::VmafAnalysis {
+        crf_da_testare(params.crf, params.crf_test_steps)
+    } else {
+        Vec::new()
+    };
+    let sonde = segmenti.len() as u32 * crf_candidati.len() as u32;
+    let passi_totali = passi_totali(&params, sonde);
     let mut cancel = handle.cancel_rx();
 
+    let (params_codifica, vmaf_analysis) = if params.mode == EncodingMode::VmafAnalysis {
+        let Some((crf_scelto, analisi)) = analizza_file(
+            state,
+            handle,
+            file_id,
+            &params,
+            &info,
+            &input_path,
+            &segmenti,
+            &crf_candidati,
+            &sonda_mkv,
+            &sonda_vmaf_json,
+            passi_totali,
+            &mut cancel,
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+        let mut params_codifica = params.clone();
+        params_codifica.crf = crf_scelto;
+        (params_codifica, Some(analisi))
+    } else {
+        (params.clone(), None)
+    };
+
     for pass in 1..=passes {
-        let args = match params.mode {
-            EncodingMode::Crf => build_crf_args(&params, &input_path, &temp_mkv),
+        let pass_progress = if params.mode == EncodingMode::VmafAnalysis {
+            sonde.saturating_mul(2) + u32::from(pass)
+        } else {
+            u32::from(pass)
+        };
+        let args = match params_codifica.mode {
+            EncodingMode::Crf | EncodingMode::VmafAnalysis => {
+                build_crf_args(&params_codifica, &input_path, &temp_mkv)
+            }
             EncodingMode::TargetSize => {
-                let bitrate = compute_video_bitrate(&params, &info)?;
+                let bitrate = compute_video_bitrate(&params_codifica, &info)?;
                 if pass == 1 {
                     log_line(
                         state,
@@ -262,12 +332,35 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
                     )
                     .await;
                 }
-                build_two_pass_args(&params, &input_path, &temp_mkv, &passlog, bitrate, pass)
+                build_two_pass_args(
+                    &params_codifica,
+                    &input_path,
+                    &temp_mkv,
+                    &passlog,
+                    bitrate,
+                    pass,
+                )
             }
         };
+        if params.mode == EncodingMode::VmafAnalysis && pass == 1 {
+            log_line(
+                state,
+                job_id,
+                file_id,
+                &format!(
+                    "Codifica finale Analisi VMAF con CRF {}",
+                    params_codifica.crf
+                ),
+            )
+            .await;
+        }
 
-        let parser =
-            ProgressParser::new(info.duration_seconds, info.estimated_frames, pass, passes);
+        let parser = ProgressParser::new(
+            info.duration_seconds,
+            info.estimated_frames,
+            pass_number(pass_progress),
+            passi_totali,
+        );
         let outcome = run_progress_run(state, handle, file_id, &args, parser, &mut cancel)
             .await
             .with_context(|| format!("codifica AV1 (passaggio {pass}/{passes})"))?;
@@ -323,6 +416,25 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
         .map(|meta| meta.len())
         .unwrap_or(0);
 
+    let vmaf = if params.measure_vmaf {
+        let measurement = measure_vmaf(
+            state,
+            handle,
+            file_id,
+            &params_codifica,
+            &info,
+            &input_path,
+            &output_path,
+            &vmaf_json,
+            passi_totali,
+            &mut cancel,
+        )
+        .await;
+        Some(measurement)
+    } else {
+        None
+    };
+
     log_line(
         state,
         job_id,
@@ -344,9 +456,493 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
         Some(output_path),
         Some(final_size),
         None,
+        vmaf,
+        vmaf_analysis,
     )
     .await;
     Ok(())
+}
+
+// Il contesto comprende sorgente, output, temporanei e canale di cancellazione
+// perché la misura deve restare un passaggio isolato e tollerante agli errori.
+#[allow(clippy::too_many_arguments)]
+async fn measure_vmaf(
+    state: &SharedState,
+    handle: &Arc<JobHandle>,
+    file_id: Uuid,
+    params: &crate::config::EncodingParams,
+    source_info: &crate::ffmpeg::probe::MediaInfo,
+    input_path: &Path,
+    output_path: &Path,
+    log_json: &Path,
+    total_passes: u8,
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+) -> VmafMeasurement {
+    let started = std::time::Instant::now();
+    let model = params.vmaf_model.clone();
+    let error_measurement = |error: String, duration_seconds: f64| VmafMeasurement {
+        model: model.clone(),
+        duration_seconds,
+        error: Some(error),
+        ..Default::default()
+    };
+
+    log_line(
+        state,
+        handle.id,
+        file_id,
+        "Misura VMAF dell'output rispetto al sorgente",
+    )
+    .await;
+
+    let output_info = match probe(&state.config.ffmpeg.ffprobe_bin, output_path).await {
+        Ok(info) => info,
+        Err(error) => {
+            let message = format!("probe dell'output per VMAF fallito: {error:#}");
+            log_line(
+                state,
+                handle.id,
+                file_id,
+                &format!("VMAF fallito: {message}"),
+            )
+            .await;
+            return error_measurement(message, started.elapsed().as_secs_f64());
+        }
+    };
+
+    let scale_to = match (
+        output_info.width,
+        output_info.height,
+        source_info.width,
+        source_info.height,
+    ) {
+        (Some(output_width), Some(output_height), Some(source_width), Some(source_height))
+            if (output_width, output_height) != (source_width, source_height) =>
+        {
+            Some((output_width, output_height))
+        }
+        (Some(_), Some(_), Some(_), Some(_)) => None,
+        _ => {
+            log_line(
+                state,
+                handle.id,
+                file_id,
+                "Dimensioni VMAF non complete: confronto senza riscalatura",
+            )
+            .await;
+            None
+        }
+    };
+    let request = VmafRequest {
+        distorted: output_path,
+        reference: input_path,
+        log_json,
+        model: &params.vmaf_model,
+        pixel_format: &params.pixel_format,
+        threads: params.cpus,
+        riferimento_inizio: None,
+        riferimento_durata: None,
+        scale_to,
+        progress_interval: params.progress_interval,
+    };
+    let args = build_vmaf_args(&request);
+    let parser = ProgressParser::new(
+        source_info.duration_seconds,
+        source_info.estimated_frames,
+        total_passes,
+        total_passes,
+    );
+    let outcome = match run_progress_run(state, handle, file_id, &args, parser, cancel).await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let message = format!("esecuzione VMAF fallita: {error:#}");
+            log_line(
+                state,
+                handle.id,
+                file_id,
+                &format!("VMAF fallito: {message}"),
+            )
+            .await;
+            return error_measurement(message, started.elapsed().as_secs_f64());
+        }
+    };
+
+    if outcome == RunOutcome::Cancelled {
+        let message = "misura interrotta".to_string();
+        log_line(state, handle.id, file_id, "VMAF interrotto").await;
+        return error_measurement(message, started.elapsed().as_secs_f64());
+    }
+
+    let contenuto = match tokio::fs::read_to_string(log_json).await {
+        Ok(contenuto) => contenuto,
+        Err(error) => {
+            let message = format!("lettura del log VMAF fallita: {error}");
+            log_line(
+                state,
+                handle.id,
+                file_id,
+                &format!("VMAF fallito: {message}"),
+            )
+            .await;
+            return error_measurement(message, started.elapsed().as_secs_f64());
+        }
+    };
+    let scores = match parse_vmaf_log(&contenuto) {
+        Ok(scores) => scores,
+        Err(error) => {
+            let message = format!("parsing del log VMAF fallito: {error:#}");
+            log_line(
+                state,
+                handle.id,
+                file_id,
+                &format!("VMAF fallito: {message}"),
+            )
+            .await;
+            return error_measurement(message, started.elapsed().as_secs_f64());
+        }
+    };
+    let duration_seconds = started.elapsed().as_secs_f64();
+    let Some(score) = scores.mean else {
+        let message = "log VMAF senza punteggio medio".to_string();
+        log_line(
+            state,
+            handle.id,
+            file_id,
+            &format!("VMAF fallito: {message}"),
+        )
+        .await;
+        return error_measurement(message, duration_seconds);
+    };
+    log_line(
+        state,
+        handle.id,
+        file_id,
+        &format!("VMAF {score:.2} (modello {model})"),
+    )
+    .await;
+    VmafMeasurement {
+        score: Some(score),
+        min: scores.min,
+        harmonic_mean: scores.harmonic_mean,
+        model,
+        duration_seconds,
+        error: None,
+    }
+}
+
+fn passi_totali(params: &EncodingParams, sonde: u32) -> u8 {
+    u8::try_from(
+        sonde.saturating_mul(2)
+            + u32::from(total_passes(params.mode))
+            + u32::from(params.measure_vmaf),
+    )
+    .unwrap_or(u8::MAX)
+}
+
+fn pass_number(pass: u32) -> u8 {
+    pass.min(u8::MAX as u32) as u8
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn analizza_file(
+    state: &SharedState,
+    handle: &Arc<JobHandle>,
+    file_id: Uuid,
+    params: &EncodingParams,
+    info: &crate::ffmpeg::probe::MediaInfo,
+    input_path: &Path,
+    segmenti: &[crate::ffmpeg::vmaf::SegmentoAnalisi],
+    crf_candidati: &[u8],
+    sonda_mkv: &Path,
+    sonda_vmaf_json: &Path,
+    passi_totali: u8,
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+) -> Result<Option<(u8, VmafAnalysis)>> {
+    let started = std::time::Instant::now();
+    let job_id = handle.id;
+    let segmenti_persistiti = segmenti
+        .iter()
+        .map(|segmento| SegmentoAnalisiPersistito {
+            indice: segmento.indice,
+            inizio_secondi: segmento.inizio_secondi,
+            durata_secondi: segmento.durata_secondi,
+        })
+        .collect::<Vec<_>>();
+    log_line(
+        state,
+        job_id,
+        file_id,
+        &format!(
+            "Analisi VMAF: {} segmenti ({}) — CRF da provare {:?}, target {:.2}, modello {}",
+            segmenti.len(),
+            segmenti
+                .iter()
+                .map(|segmento| format!("{}s", format_clock(segmento.inizio_secondi)))
+                .collect::<Vec<_>>()
+                .join(", "),
+            crf_candidati,
+            params.vmaf_target,
+            params.vmaf_model
+        ),
+    )
+    .await;
+    if segmenti.len() < params.vmaf_segments as usize {
+        log_line(
+            state,
+            job_id,
+            file_id,
+            &format!(
+                "Analisi VMAF: durata insufficiente: ridotti a {} segmenti",
+                segmenti.len()
+            ),
+        )
+        .await;
+    }
+    if crf_candidati.is_empty() {
+        log_line(
+            state,
+            job_id,
+            file_id,
+            "Analisi VMAF: nessun CRF candidato entro il limite 63",
+        )
+        .await;
+    }
+
+    let mut risultati = Vec::with_capacity(crf_candidati.len());
+    let mut passo = 0u32;
+    for &crf in crf_candidati {
+        let mut vmaf_per_segmento = Vec::with_capacity(segmenti.len());
+        let mut bitrate_per_segmento = Vec::with_capacity(segmenti.len());
+        for (indice, segmento) in segmenti.iter().enumerate() {
+            if handle.is_stop_requested() {
+                mark_cancelled(state, handle, file_id).await;
+                return Ok(None);
+            }
+            passo += 1;
+            let probe_request = SondaRequest {
+                params,
+                input: input_path,
+                output_mkv: sonda_mkv,
+                segmento,
+                crf,
+            };
+            let probe_args = build_probe_args(&probe_request);
+            let probe_parser =
+                ProgressParser::new(segmento.durata_secondi, 0, pass_number(passo), passi_totali);
+            let probe_outcome = match run_progress_run(
+                state,
+                handle,
+                file_id,
+                &probe_args,
+                probe_parser,
+                cancel,
+            )
+            .await
+            {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    log_line(
+                        state,
+                        job_id,
+                        file_id,
+                        &format!(
+                            "Analisi VMAF - CRF {}, segmento {}/{}: codifica sonda fallita: {error:#}",
+                            crf,
+                            indice + 1,
+                            segmenti.len()
+                        ),
+                    )
+                    .await;
+                    vmaf_per_segmento.push(None);
+                    bitrate_per_segmento.push(None);
+                    continue;
+                }
+            };
+            if probe_outcome == RunOutcome::Cancelled {
+                mark_cancelled(state, handle, file_id).await;
+                return Ok(None);
+            }
+            let bitrate = tokio::fs::metadata(sonda_mkv)
+                .await
+                .map(|metadata| (metadata.len() as f64 * 8.0 / segmento.durata_secondi) as u64)
+                .ok();
+            passo += 1;
+            let sonda_info = match probe(&state.config.ffmpeg.ffprobe_bin, sonda_mkv).await {
+                Ok(info) => info,
+                Err(error) => {
+                    log_line(
+                        state,
+                        job_id,
+                        file_id,
+                        &format!(
+                            "Analisi VMAF - CRF {}, segmento {}/{}: probe sonda fallito: {error:#}",
+                            crf,
+                            indice + 1,
+                            segmenti.len()
+                        ),
+                    )
+                    .await;
+                    vmaf_per_segmento.push(None);
+                    bitrate_per_segmento.push(bitrate);
+                    continue;
+                }
+            };
+            let scale_to = match (sonda_info.width, sonda_info.height, info.width, info.height) {
+                (Some(width), Some(height), Some(source_width), Some(source_height))
+                    if (width, height) != (source_width, source_height) =>
+                {
+                    Some((width, height))
+                }
+                _ => None,
+            };
+            let request = VmafRequest {
+                distorted: sonda_mkv,
+                reference: input_path,
+                log_json: sonda_vmaf_json,
+                model: &params.vmaf_model,
+                pixel_format: &params.pixel_format,
+                threads: params.cpus,
+                riferimento_inizio: Some(segmento.inizio_secondi),
+                riferimento_durata: Some(segmento.durata_secondi),
+                scale_to,
+                progress_interval: params.progress_interval,
+            };
+            let vmaf_args = build_vmaf_args(&request);
+            let vmaf_parser =
+                ProgressParser::new(segmento.durata_secondi, 0, pass_number(passo), passi_totali);
+            remove_file_if_present(sonda_vmaf_json).await;
+            let vmaf_outcome =
+                match run_progress_run(state, handle, file_id, &vmaf_args, vmaf_parser, cancel)
+                    .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        log_line(
+                            state,
+                            job_id,
+                            file_id,
+                            &format!(
+                                "Analisi VMAF - CRF {}, segmento {}/{}: misura fallita: {error:#}",
+                                crf,
+                                indice + 1,
+                                segmenti.len()
+                            ),
+                        )
+                        .await;
+                        vmaf_per_segmento.push(None);
+                        bitrate_per_segmento.push(bitrate);
+                        continue;
+                    }
+                };
+            if vmaf_outcome == RunOutcome::Cancelled {
+                mark_cancelled(state, handle, file_id).await;
+                return Ok(None);
+            }
+            let score = match tokio::fs::read_to_string(sonda_vmaf_json).await {
+                Ok(contenuto) => match parse_vmaf_log(&contenuto) {
+                    Ok(scores) => scores.mean,
+                    Err(error) => {
+                        log_line(
+                            state,
+                            job_id,
+                            file_id,
+                            &format!(
+                                "Analisi VMAF - CRF {}, segmento {}/{}: parsing fallito: {error:#}",
+                                crf,
+                                indice + 1,
+                                segmenti.len()
+                            ),
+                        )
+                        .await;
+                        None
+                    }
+                },
+                Err(error) => {
+                    log_line(
+                        state,
+                        job_id,
+                        file_id,
+                        &format!(
+                            "Analisi VMAF - CRF {}, segmento {}/{}: log VMAF assente: {error}",
+                            crf,
+                            indice + 1,
+                            segmenti.len()
+                        ),
+                    )
+                    .await;
+                    None
+                }
+            };
+            if score.is_none() {
+                log_line(
+                    state,
+                    job_id,
+                    file_id,
+                    &format!(
+                        "Analisi VMAF - CRF {}, segmento {}/{}: sonda fallita o misura non valida",
+                        crf,
+                        indice + 1,
+                        segmenti.len()
+                    ),
+                )
+                .await;
+            } else {
+                log_line(
+                    state,
+                    job_id,
+                    file_id,
+                    &format!(
+                        "Analisi VMAF - CRF {}, segmento {}/{} (da {}): VMAF {:.2}, {:.2} Mb/s",
+                        crf,
+                        indice + 1,
+                        segmenti.len(),
+                        format_clock(segmento.inizio_secondi),
+                        score.unwrap_or_default(),
+                        bitrate.unwrap_or_default() as f64 / 1_000_000.0
+                    ),
+                )
+                .await;
+            }
+            vmaf_per_segmento.push(score);
+            bitrate_per_segmento.push(bitrate);
+        }
+        let valori = vmaf_per_segmento
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        let bitrate_valori = bitrate_per_segmento
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        risultati.push(RisultatoCrf {
+            crf,
+            vmaf_medio: (!valori.is_empty())
+                .then(|| valori.iter().sum::<f64>() / valori.len() as f64),
+            bitrate_medio_bps: (!bitrate_valori.is_empty())
+                .then(|| bitrate_valori.iter().sum::<u64>() / bitrate_valori.len() as u64),
+            vmaf_per_segmento,
+        });
+    }
+
+    let (crf_scelto, motivo) = scegli_crf(&risultati, params.vmaf_target, params.crf);
+    let analisi = VmafAnalysis {
+        crf_scelto,
+        crf_di_partenza: params.crf,
+        target: params.vmaf_target,
+        modello: params.vmaf_model.clone(),
+        motivo,
+        segmenti: segmenti_persistiti,
+        risultati,
+        duration_seconds: started.elapsed().as_secs_f64(),
+        error: (motivo == crate::models::MotivoScelta::AnalisiNonEseguibile)
+            .then(|| "nessuna sonda ha prodotto una misura VMAF valida".to_string()),
+    };
+    for riga in righe_riepilogo(&analisi) {
+        log_line(state, job_id, file_id, &riga).await;
+    }
+    Ok(Some((crf_scelto, analisi)))
 }
 
 /// Esegue un passaggio ffmpeg propagando progresso e log verso il frontend.
@@ -430,6 +1026,7 @@ fn is_ffmpeg_error_line(line: &str) -> bool {
         .any(|marker| lower.contains(marker))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finish_file(
     state: &SharedState,
     handle: &Arc<JobHandle>,
@@ -438,6 +1035,8 @@ async fn finish_file(
     output_path: Option<PathBuf>,
     output_size: Option<u64>,
     error: Option<String>,
+    vmaf: Option<VmafMeasurement>,
+    vmaf_analysis: Option<VmafAnalysis>,
 ) {
     {
         let mut job = handle.job.write().await;
@@ -447,6 +1046,8 @@ async fn finish_file(
             file.output_path = output_path;
             file.output_size_bytes = output_size;
             file.error = error.clone();
+            file.vmaf = vmaf;
+            file.vmaf_analysis = vmaf_analysis;
             if status == FileStatus::Completed || status == FileStatus::Skipped {
                 file.progress.percent = 100.0;
             }
@@ -471,6 +1072,8 @@ async fn mark_cancelled(state: &SharedState, handle: &Arc<JobHandle>, file_id: U
         None,
         None,
         None,
+        None,
+        None,
     )
     .await;
 }
@@ -491,6 +1094,8 @@ async fn fail_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uuid, 
         None,
         None,
         Some(message.clone()),
+        None,
+        None,
     )
     .await;
 
@@ -598,6 +1203,7 @@ async fn remove_file_if_present_quiet(path: &Path) {
 mod tests {
     use super::*;
     use crate::config::{Config, EncodingParams};
+    use crate::ffmpeg::encode::total_passes_with_measure;
     use crate::state::AppState;
 
     async fn state_di_prova(dir: &Path) -> SharedState {
@@ -650,6 +1256,39 @@ mod tests {
             "Error opening output file /tmp/a.mkv."
         ));
         assert!(is_ffmpeg_error_line("prova.mp4: No such file or directory"));
+    }
+
+    #[test]
+    fn un_job_senza_misura_non_cambia_i_passaggi() {
+        assert_eq!(
+            total_passes_with_measure(EncodingMode::Crf, false),
+            total_passes(EncodingMode::Crf)
+        );
+        assert_eq!(
+            total_passes_with_measure(EncodingMode::TargetSize, false),
+            total_passes(EncodingMode::TargetSize)
+        );
+    }
+
+    #[test]
+    fn il_conteggio_dei_passaggi_satura() {
+        let params = EncodingParams {
+            mode: EncodingMode::VmafAnalysis,
+            ..Default::default()
+        };
+        assert_eq!(passi_totali(&params, 100), 201);
+        assert_eq!(passi_totali(&params, 1_000), 255);
+    }
+
+    #[test]
+    fn senza_modalita_di_analisi_non_ci_sono_sonde() {
+        let params = EncodingParams::default();
+        assert_eq!(passi_totali(&params, 0), 1);
+        let params = EncodingParams {
+            measure_vmaf: true,
+            ..Default::default()
+        };
+        assert_eq!(passi_totali(&params, 0), 2);
     }
 
     #[tokio::test]

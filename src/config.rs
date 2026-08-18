@@ -16,6 +16,10 @@ pub enum EncodingMode {
     Crf,
     /// Dimensione finale desiderata: VBR a due passaggi, impone `tune=0`.
     TargetSize,
+    /// Codifica a qualità costante preceduta da un'analisi VMAF che sceglie il
+    /// CRF: si parte dal CRF impostato e si cerca il valore più alto che resta
+    /// sopra la soglia di qualità.
+    VmafAnalysis,
 }
 
 /// Parametri di conversione. Sono i default di sistema letti dal file di
@@ -28,7 +32,7 @@ pub struct EncodingParams {
     /// a 1:1. Il valore `0` significa dimensione originale: nessun
     /// ridimensionamento e SAR del sorgente intatto.
     pub scale_height: u32,
-    /// Constant Rate Factor, usato solo in modalità `crf`.
+    /// Constant Rate Factor, usato in modalità `crf` e `vmaf_analysis`.
     pub crf: u8,
     pub preset: u8,
     pub audio_bitrate: String,
@@ -49,6 +53,17 @@ pub struct EncodingParams {
     pub suffix: String,
     /// Se falso, un output già presente viene saltato invece che riscritto.
     pub overwrite: bool,
+    /// Se attivo, dopo la conversione viene misurato il VMAF dell'output
+    /// rispetto al sorgente. Costa un passaggio ffmpeg in più, quindi resta opt-in.
+    pub measure_vmaf: bool,
+    /// Modello passato a `libvmaf` come `model=version=<valore>`.
+    pub vmaf_model: String,
+    /// Quanti spezzoni del sorgente vengono sondati in modalità di analisi.
+    pub vmaf_segments: u32,
+    /// Quanti CRF provare oltre a quello impostato, a passi di +2.
+    pub crf_test_steps: u32,
+    /// Qualità media minima che il CRF scelto deve garantire.
+    pub vmaf_target: f64,
 }
 
 impl Default for EncodingParams {
@@ -68,6 +83,11 @@ impl Default for EncodingParams {
             size_margin_percent: 1.0,
             suffix: "_av1".to_string(),
             overwrite: false,
+            measure_vmaf: false,
+            vmaf_model: "vmaf_v1.0.16_5d0h".to_string(),
+            vmaf_segments: 3,
+            crf_test_steps: 3,
+            vmaf_target: 93.0,
         }
     }
 }
@@ -99,6 +119,18 @@ impl EncodingParams {
         }
         if !is_safe_ffmpeg_token(&self.pixel_format) {
             return Err("pixel_format contiene caratteri non ammessi".into());
+        }
+        if !is_safe_ffmpeg_token(&self.vmaf_model) {
+            return Err("vmaf_model contiene caratteri non ammessi".into());
+        }
+        if !(1..=10).contains(&self.vmaf_segments) {
+            return Err("vmaf_segments deve essere compreso fra 1 e 10".into());
+        }
+        if !(1..=10).contains(&self.crf_test_steps) {
+            return Err("crf_test_steps deve essere compreso fra 1 e 10".into());
+        }
+        if !self.vmaf_target.is_finite() || !(0.0..=100.0).contains(&self.vmaf_target) {
+            return Err("vmaf_target deve essere compreso fra 0 e 100".into());
         }
         if self.keyint == 0 || self.keyint > 3000 {
             return Err("keyint deve essere compreso fra 1 e 3000".into());
@@ -134,11 +166,11 @@ impl EncodingParams {
         Ok(())
     }
 
-    /// `tune=5` è accettato da SVT-AV1 solo in CRF: in VBR a due passaggi si
-    /// ricade su `tune=0`, l'unico compatibile.
+    /// `tune=5` è accettato da SVT-AV1 in CRF e nell'analisi VMAF; in VBR a due
+    /// passaggi si ricade su `tune=0`, l'unico compatibile.
     pub fn effective_svtav1_params(&self) -> String {
         match self.mode {
-            EncodingMode::Crf => self.svtav1_params.clone(),
+            EncodingMode::Crf | EncodingMode::VmafAnalysis => self.svtav1_params.clone(),
             EncodingMode::TargetSize => "tune=0".to_string(),
         }
     }
@@ -454,6 +486,29 @@ impl Config {
                 self.encoding.progress_interval = parsed;
             }
         }
+        if let Ok(value) = var("AV1WC_MEASURE_VMAF") {
+            if let Ok(parsed) = value.parse::<bool>() {
+                self.encoding.measure_vmaf = parsed;
+            }
+        }
+        if let Ok(value) = var("AV1WC_VMAF_MODEL") {
+            self.encoding.vmaf_model = value;
+        }
+        if let Ok(value) = var("AV1WC_VMAF_SEGMENTS") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                self.encoding.vmaf_segments = parsed;
+            }
+        }
+        if let Ok(value) = var("AV1WC_CRF_TEST_STEPS") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                self.encoding.crf_test_steps = parsed;
+            }
+        }
+        if let Ok(value) = var("AV1WC_VMAF_TARGET") {
+            if let Ok(parsed) = value.parse::<f64>() {
+                self.encoding.vmaf_target = parsed;
+            }
+        }
     }
 
     fn validate(&self) -> Result<()> {
@@ -536,12 +591,79 @@ mod tests {
     }
 
     #[test]
+    fn la_modalita_di_analisi_non_forza_tune_zero() {
+        let params = EncodingParams {
+            mode: EncodingMode::VmafAnalysis,
+            svtav1_params: "tune=5".into(),
+            ..Default::default()
+        };
+        assert_eq!(params.effective_svtav1_params(), "tune=5");
+        let target = EncodingParams {
+            mode: EncodingMode::TargetSize,
+            target_size_mb: Some(300.0),
+            svtav1_params: "tune=5".into(),
+            ..Default::default()
+        };
+        assert_eq!(target.effective_svtav1_params(), "tune=0");
+    }
+
+    #[test]
+    fn i_parametri_di_analisi_hanno_i_default_attesi() {
+        let params = EncodingParams::default();
+        assert_eq!(params.vmaf_segments, 3);
+        assert_eq!(params.crf_test_steps, 3);
+        assert_eq!(params.vmaf_target, 93.0);
+    }
+
+    #[test]
+    fn i_parametri_di_analisi_fuori_intervallo_sono_rifiutati() {
+        let mut params = EncodingParams {
+            vmaf_segments: 0,
+            ..Default::default()
+        };
+        assert!(params.validate().is_err());
+        params.vmaf_segments = 3;
+        params.crf_test_steps = 11;
+        assert!(params.validate().is_err());
+        params.crf_test_steps = 3;
+        params.vmaf_target = 150.0;
+        assert!(params.validate().is_err());
+    }
+
+    #[test]
     fn parametri_svtav1_rifiutano_iniezioni() {
         let params = EncodingParams {
             svtav1_params: "tune=5; rm -rf /".into(),
             ..Default::default()
         };
         assert!(params.validate().is_err());
+    }
+
+    #[test]
+    fn la_misura_vmaf_e_disattiva_per_default() {
+        let params = EncodingParams::default();
+        assert!(!params.measure_vmaf);
+        assert_eq!(params.vmaf_model, "vmaf_v1.0.16_5d0h");
+    }
+
+    #[test]
+    fn il_modello_vmaf_rifiuta_caratteri_non_ammessi() {
+        let params = EncodingParams {
+            vmaf_model: "vmaf; rm -rf /".into(),
+            ..Default::default()
+        };
+        assert!(params.validate().is_err());
+    }
+
+    #[test]
+    fn il_modello_vmaf_accetta_i_nomi_built_in() {
+        for model in ["vmaf_v1.0.16_5d0h", "vmaf_v0.6.1neg"] {
+            let params = EncodingParams {
+                vmaf_model: model.into(),
+                ..Default::default()
+            };
+            assert!(params.validate().is_ok(), "modello rifiutato: {model}");
+        }
     }
 
     #[test]

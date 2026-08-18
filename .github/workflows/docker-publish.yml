@@ -26,7 +26,7 @@ jobs:
         run: |
           repository="${GITHUB_REPOSITORY,,}"
           echo "app=ghcr.io/${repository}" >> "$GITHUB_OUTPUT"
-          echo "ffmpeg=ghcr.io/${repository}-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0" >> "$GITHUB_OUTPUT"
+          echo "ffmpeg=ghcr.io/${repository}-ffmpeg:9.0.1-svt4.2.0-vmaf3.2.0" >> "$GITHUB_OUTPUT"
 
       - name: Generate application image metadata
         id: meta

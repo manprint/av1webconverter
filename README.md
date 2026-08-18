@@ -30,6 +30,8 @@ parte SSH: ffmpeg viene eseguito nello stesso container del servizio.
 - Download dei file convertiti: singolo, selezione multipla o intero job in ZIP.
 - Notifiche Slack di terminazione ed errore.
 - Log applicativi strutturati JSON.
+- Misura VMAF opzionale sull'output definitivo, senza modificarlo.
+- Modalità **Analisi VMAF + Qualità Costante**, selezionabile via API o frontend.
 - Frontend protetto da basic auth con credenziali da configurazione.
 
 ## Requisiti
@@ -93,8 +95,8 @@ passarla al `Dockerfile` applicativo:
 
 ```bash
 docker build -f Dockerfile.ffmpeg-svtav1 \
-  -t local/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 .
-docker build --build-arg FFMPEG_IMAGE=local/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 \
+  -t local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0 .
+docker build --build-arg FFMPEG_IMAGE=local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0 \
   -t av1webconverter:local .
 ```
 
@@ -121,6 +123,18 @@ cargo run -- --print-config         # configurazione effettiva
 I test end-to-end usano l'`ffmpeg` di sistema; se manca `libsvtav1` vengono
 saltati con un messaggio invece di far fallire la build.
 
+Per verificare la conversione con i binari FFmpeg dell'immagine custom, estrarre
+`ffmpeg` e `ffprobe` in `target/ffmpeg9/bin` e anteporre quella directory al
+`PATH`:
+
+```bash
+PATH="$PWD/target/ffmpeg9/bin:$PATH" cargo test --test e2e_conversion
+```
+
+Gli stessi test si saltano automaticamente quando il binario nel `PATH` non
+include SVT-AV1; il binario dell'immagine include SVT-AV1, libdav1d, libopus e
+libvmaf.
+
 ## Configurazione
 
 Tutte le voci sono documentate in [`config.example.toml`](config.example.toml).
@@ -137,11 +151,16 @@ poter configurare il container senza montare un TOML. Le più usate:
 | `AV1WC_PRESET`             | preset SVT-AV1 di default                          |
 | `AV1WC_SCALE_HEIGHT`       | altezza massima dell'output; `0` = dimensione originale |
 | `AV1WC_SVTAV1_PARAMS`      | `-svtav1-params` di default                        |
+| `AV1WC_MEASURE_VMAF`       | abilita la misura VMAF (`true`/`false`)            |
+| `AV1WC_VMAF_MODEL`         | modello VMAF di default                           |
+| `AV1WC_VMAF_SEGMENTS`      | segmenti analizzati in modalità VMAF              |
+| `AV1WC_CRF_TEST_STEPS`     | CRF aggiuntivi provati in modalità VMAF           |
+| `AV1WC_VMAF_TARGET`        | VMAF medio minimo richiesto                        |
 | `AV1WC_LOG_LEVEL`          | filtro dei log applicativi                         |
 
 ## Parametri di conversione
 
-Due modalità:
+Tre modalità:
 
 **`crf` — qualità costante** (default). Bitrate variabile, un solo passaggio.
 Usa `crf` e `svtav1_params`.
@@ -152,13 +171,21 @@ video è calcolato sottraendo dal target il margine per l'overhead MP4
 obiettivo, non un limite rigido: per un vincolo stretto alzare il margine (es.
 `size_margin_percent = 2`).
 
+**`vmaf_analysis` — Analisi VMAF + Qualità Costante.** Parte dal `crf` impostato,
+prova CRF crescenti di 2 in 2 su spezzoni casuali da 30 secondi e usa per la
+conversione il CRF più alto che mantiene il VMAF medio almeno pari a
+`vmaf_target`. Ogni CRF viene misurato su tutti i segmenti; se nessuno supera la
+soglia viene usato il CRF impostato. Fuori da questa modalità non vengono eseguite
+sonde aggiuntive.
+
 Default rilevanti, ereditati dalle misure documentate in `README.image.md`:
 
 - `svtav1_params = "tune=5"`, ottimizzato per la qualità percettiva VMAF (95,076
   contro 92,810 di `tune=0` a pari bitrate). `tune=0` conserva un PSNR superiore
   (46,314 contro 45,998 dB) ed è la scelta quando serve fedeltà matematica.
-- SVT-AV1 accetta `tune=5` **solo in CRF**: in modalità `target_size` il valore
-  viene forzato a `tune=0`, l'unico compatibile con il VBR a due passaggi.
+- SVT-AV1 accetta `tune=5` nelle modalità CRF e analisi VMAF: in modalità
+  `target_size` il valore viene forzato a `tune=0`, l'unico compatibile con il
+  VBR a due passaggi.
   `tune=5` richiede inoltre SVT-AV1 4.x, quello dell'immagine custom.
 - `enable-qm=1:qm-min=0` resta escluso: nei test riduceva sia SSIM sia PSNR.
 - Il ridimensionamento limita l'altezza a `scale_height` mantenendo l'aspetto
@@ -174,6 +201,181 @@ Default rilevanti, ereditati dalle misure documentate in `README.image.md`:
   vengono salvati.
 - La scelta `Dimensione originale` può produrre file più grandi e richiedere più
   tempo, perché l'altezza del sorgente non viene ridotta.
+
+### Misura VMAF
+
+`measure_vmaf` (default `false`) misura, dopo la conversione, la qualità VMAF
+dell'MP4 definitivo rispetto al sorgente. È un passaggio ffmpeg aggiuntivo e non
+modifica l'output pubblicato. Si può impostare anche con `AV1WC_MEASURE_VMAF`.
+
+`vmaf_model` (default `vmaf_v1.0.16_5d0h`) seleziona il modello built-in di
+libvmaf. Il default è il modello per telefono, tarato su distanza di visione 5H.
+Sono disponibili `vmaf_v1.0.16_5d0h` per telefono,
+`vmaf_v1.0.16_3d0h` per televisore a 1080p,
+`vmaf_v1.0.16_3d0h_2160` e `vmaf_v1.0.16_1d5h_2160` per 4K, le quattro
+varianti `_hfr_` per alto frame rate e i modelli precedenti
+`vmaf_v0.6.1`, `vmaf_v0.6.1neg`, `vmaf_b_v0.6.3`, `vmaf_4k_v0.6.1`,
+`vmaf_4k_v0.6.1neg`. Il modello telefono tende a restituire punteggi più alti a
+parità di file, perché su schermo piccolo gli artefatti si vedono meno; punteggi
+ottenuti con modelli diversi non sono confrontabili. Il modello si può impostare
+con `AV1WC_VMAF_MODEL`.
+
+Il confronto avviene alla risoluzione di uscita: quando l'output è ridimensionato,
+il sorgente viene riscalato alla stessa geometria. Il punteggio misura quindi la
+perdita da compressione e non quella dovuta al ridimensionamento.
+
+Esempio di job con misura attiva:
+
+```json
+{
+  "name": "episodio misurato",
+  "params": {
+    "crf": 40,
+    "measure_vmaf": true,
+    "vmaf_model": "vmaf_v1.0.16_5d0h"
+  }
+}
+```
+
+Al termine, ogni file contiene `vmaf` con questa forma:
+
+```json
+{
+  "score": 95.5,
+  "min": 80.1,
+  "harmonic_mean": 95.0,
+  "model": "vmaf_v1.0.16_5d0h",
+  "duration_seconds": 12.4,
+  "error": null
+}
+```
+
+La misura raddoppia circa il tempo di elaborazione del file. Un suo fallimento
+non fa fallire la conversione e viene riportato in `vmaf.error`; se il job viene
+interrotto durante la misura, l'output resta valido ma senza punteggio. Il numero
+è confrontabile solo fra file misurati con lo stesso modello.
+
+#### Uso dall'interfaccia
+
+Nel pannello **Nuovo job**, attivare **Misura VMAF dopo la conversione** e, se
+necessario, modificare **Modello VMAF**. Gli stessi campi sono disponibili in
+**Parametri** per un job già creato, finché non è in esecuzione. Dopo la
+conversione il risultato appare nella riga del file, accanto alle dimensioni:
+
+```
+VMAF 95.50 (vmaf_v1.0.16_5d0h)
+```
+
+`VMAF <punteggio> (<modello>)` indica la media VMAF aggregata dal modello
+selezionato. Se la misura non produce un punteggio viene mostrato `VMAF non
+disponibile`; il motivo dettagliato resta nel log del file e nel campo `error`
+della misura restituito dall'API. Durante la misura il progresso mostra un
+passaggio aggiuntivo rispetto alla sola codifica.
+
+#### Risoluzione dei problemi e limiti
+
+Se il punteggio manca sempre, verificare che ffmpeg includa il filtro `libvmaf`:
+
+```bash
+ffmpeg -hide_banner -filters | grep libvmaf
+```
+
+Il filtro è incluso nell'immagine fornita, ma può mancare nelle build ffmpeg di
+sistema. Se il nome del modello non è riconosciuto da libvmaf, il file resta
+convertito e il motivo compare nel campo di errore della misura.
+
+La misura non modifica l'MP4 pubblicato. I risultati sono confrontabili solo
+fra file misurati con lo stesso modello. Con più conversioni in parallelo la
+misura usa la CPU insieme alle codifiche e può aumentare il tempo complessivo.
+
+### Analisi VMAF + Qualità Costante
+
+La modalità si attiva via API impostando `mode` a `vmaf_analysis`, oppure dal
+pannello **Nuovo job** selezionando **Analisi VMAF + Qualità Costante**. In questa
+modalità restano visibili **CRF** e **svtav1-params**; compaiono anche i tre campi
+specifici:
+
+| Parametro | Default | Intervallo | Effetto |
+|-----------|---------|------------|---------|
+| `vmaf_segments` | `3` | `1..=10` | numero di spezzoni casuali da 30 secondi |
+| `crf_test_steps` | `3` | `1..=10` | numero di CRF aggiuntivi, a passi di 2 |
+| `vmaf_target` | `93.0` | `0..=100` | VMAF medio minimo per accettare un CRF |
+
+**VMAF Segments** indica quanti spezzoni casuali da 30 secondi vengono sondati
+per ogni CRF; default `3`. **CRF Test Steps** indica quanti CRF aggiuntivi
+vengono provati a passi di 2; default `3`. **VMAF Target** è il punteggio VMAF
+medio minimo richiesto; default `93`. I tre valori rispettano gli intervalli
+indicati nella tabella.
+
+Le variabili d'ambiente corrispondenti sono `AV1WC_VMAF_SEGMENTS`,
+`AV1WC_CRF_TEST_STEPS` e `AV1WC_VMAF_TARGET`. I CRF oltre 63 vengono ignorati;
+se tutti quelli provati restano sopra il target conviene aumentare
+`crf_test_steps`.
+
+Esempio di richiesta API:
+
+```json
+{
+  "name": "analisi qualità",
+  "params": {
+    "mode": "vmaf_analysis",
+    "crf": 40,
+    "preset": 10,
+    "scale_height": 480,
+    "vmaf_segments": 3,
+    "crf_test_steps": 3,
+    "vmaf_target": 93.0
+  }
+}
+```
+
+Lo stesso esempio dall'interfaccia si ottiene impostando **CRF** a `40`, **CRF
+Test Steps** a `3`, **VMAF Segments** a `3` e **VMAF Target** a `93`. Il backend
+prova quindi CRF `42`, `44` e `46` su tre spezzoni da 30 secondi e usa il CRF più
+alto che resta sopra `93`.
+
+Il log contiene la selezione dei segmenti, una riga per ogni sonda, il riepilogo
+per CRF e la conclusione `Analisi VMAF - CRF scelto:`. In una prova su un clip di
+70 secondi con due segmenti e due step, le sonde CRF 42 e 44 hanno prodotto VMAF
+medi 99.40 e 99.22 in 5.84 secondi; il CRF scelto è stato 44 perché entrambi
+superavano il target.
+
+Il costo è `segmenti × step` codifiche brevi più altrettante misure VMAF prima
+della conversione finale. Per esempio, 2 segmenti e 2 step significano 4 sonde,
+4 misure e poi la codifica definitiva. Lasciare valori bassi con preset lenti.
+Il risultato viene persistito in `files[].vmaf_analysis` con segmenti, punteggi,
+motivo della scelta e durata dell'analisi.
+
+Durante l'analisi la barra di avanzamento conta anche le sonde: ogni sonda usa
+due passaggi, oltre alla codifica finale, quindi il numero di passaggi mostrato è
+più alto del normale. La riga del file mostra `analisi VMAF: CRF <n>, target
+<t>`; il tooltip della riga contiene una riga per ogni CRF con il relativo VMAF.
+Il riepilogo completo, compreso il motivo della scelta, resta disponibile nel
+log di conversione.
+
+Per il caso d'uso tipico su cellulare, con output 480p o 720p, il modello VMAF
+predefinito è tarato per lo schermo del telefono. In questa condizione il target
+`93` corrisponde già a una qualità molto alta. Se tutti gli step restano sopra il
+target, aumentare **CRF Test Steps** per cercare un CRF più alto e risparmiare
+spazio.
+
+Limiti noti: il CRF scelto vale per quel file e per il modello usato; punteggi di
+modelli diversi non sono confrontabili. Su file più corti di 30 secondi si analizza
+il file intero. Se nessun CRF raggiunge il target viene usato il CRF impostato,
+mentre se tutti lo superano bisogna aumentare gli step per cercare valori ancora
+più alti.
+
+#### Risoluzione dei problemi
+
+Se non compare alcun risultato di analisi, verificare che ffmpeg includa il
+filtro `libvmaf`:
+
+```bash
+ffmpeg -hide_banner -filters | grep libvmaf
+```
+
+L'immagine fornita lo include; alcune build ffmpeg di sistema no. Se l'analisi è
+molto lenta, ridurre il preset oppure il numero di segmenti per ogni CRF.
 
 ## Log
 

@@ -8,13 +8,13 @@
 # checksum. Va costruita (o scaricata) prima:
 #
 #   docker build -f Dockerfile.ffmpeg-svtav1 \
-#     -t local/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0 .
+#     -t local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0 .
 #   docker build -t av1webconverter:local .
 #
 # Per usare la base pubblicata dal workflow su GHCR:
-#   docker build --build-arg FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0 -t av1webconverter:local .
+#   docker build --build-arg FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.1-svt4.2.0-vmaf3.2.0 -t av1webconverter:local .
 
-ARG FFMPEG_IMAGE=local/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0
+ARG FFMPEG_IMAGE=local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0
 ARG RUST_IMAGE=rust:1.96-bookworm
 
 FROM ${FFMPEG_IMAGE} AS ffmpeg
@@ -40,10 +40,10 @@ RUN touch src/main.rs src/lib.rs \
 
 FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 
-# libopus0 è l'unica libreria dinamica richiesta dal ffmpeg statico,
-# ca-certificates serve alle notifiche Slack in HTTPS, curl al healthcheck.
+# ffmpeg non richiede libopus dinamica; ca-certificates serve alle notifiche
+# Slack in HTTPS, curl al healthcheck.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl libopus0 \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --create-home --uid 10001 av1
 

@@ -20,7 +20,7 @@ Valori proposti dal backend a ogni nuovo job.
 
 ```json
 {
-  "params": { "mode": "crf", "crf": 47, "preset": 1, "scale_height": 480, "...": "..." },
+  "params": { "mode": "crf", "crf": 47, "preset": 1, "scale_height": 480, "vmaf_segments": 3, "crf_test_steps": 3, "vmaf_target": 93.0, "...": "..." },
   "concurrency": 1,
   "allowed_extensions": ["mp4", "mov", "mkv"],
   "max_upload_mb": 8192
@@ -102,9 +102,80 @@ dimensione originale, cioè nessun ridimensionamento e rapporto dei pixel del
 sorgente conservato. Sono ammessi `0` e i valori fra 16 e 4320; l'interfaccia
 web propone un sottoinsieme di valori comuni, l'API accetta tutto l'intervallo.
 
+`params.measure_vmaf` abilita la misura VMAF dopo la conversione (default
+`false`). `params.vmaf_model` seleziona il modello built-in di libvmaf (default
+`vmaf_v1.0.16_5d0h`). Il nome del modello deve contenere solo caratteri sicuri;
+un valore non valido viene rifiutato con `400`. La misura è un passaggio ffmpeg
+aggiuntivo e non modifica l'output pubblicato.
+
+`params.mode` può essere `crf` (qualità costante), `target_size` (VBR a due
+passaggi) oppure `vmaf_analysis` (analisi preliminare su spezzoni, seguita dalla
+codifica CRF a un passaggio con il CRF scelto).
+
+In modalità `vmaf_analysis` si possono impostare i parametri seguenti:
+
+| Parametro | Default | Intervallo | Effetto |
+| --------- | ------- | ---------- | ------- |
+| `vmaf_segments` | `3` | `1..=10` | spezzoni casuali da 30 secondi sondati per ogni CRF |
+| `crf_test_steps` | `3` | `1..=10` | CRF aggiuntivi provati a passi di 2 |
+| `vmaf_target` | `93.0` | `0..=100` | VMAF medio minimo richiesto |
+
+Un valore fuori intervallo per uno dei tre parametri fa rispondere la creazione
+del job con `400`. `progress.total_passes` in questa modalità comprende anche
+le sonde: due passaggi per ogni sonda, oltre alla codifica finale.
+
+Quando `measure_vmaf` è attivo, `progress.total_passes` include anche il
+passaggio della misura.
+
 ### `GET /api/jobs/{job_id}`
 
 Un singolo job.
+
+Il campo `files[].vmaf` è `null` se la misura non è stata richiesta o il file
+non è ancora stato convertito. Dopo una misura contiene:
+
+```json
+{
+  "score": 95.5,
+  "min": 80.1,
+  "harmonic_mean": 95.0,
+  "model": "vmaf_v1.0.16_5d0h",
+  "duration_seconds": 12.4,
+  "error": null
+}
+```
+
+In caso di fallimento `score`, `min` e `harmonic_mean` possono essere `null`;
+`error` contiene il motivo senza far fallire la conversione del file.
+
+Il campo `files[].vmaf_analysis` è `null` se il file non è stato convertito in
+modalità `vmaf_analysis`. Altrimenti contiene:
+
+```json
+{
+  "crf_scelto": 44,
+  "crf_di_partenza": 40,
+  "target": 93.0,
+  "modello": "vmaf_v1.0.16_5d0h",
+  "motivo": "sopra_soglia",
+  "segmenti": [
+    { "indice": 0, "inizio_secondi": 12.0, "durata_secondi": 30.0 }
+  ],
+  "risultati": [
+    { "crf": 42, "vmaf_medio": 95.1, "bitrate_medio_bps": 1200000, "vmaf_per_segmento": [95.0] },
+    { "crf": 44, "vmaf_medio": 93.8, "bitrate_medio_bps": 980000, "vmaf_per_segmento": [93.8] }
+  ],
+  "duration_seconds": 12.4,
+  "error": null
+}
+```
+
+`motivo` può essere `sopra_soglia`, `tutti_sopra_soglia`,
+`nessuno_sopra_soglia` o `analisi_non_eseguibile`. `risultati[]` contiene una
+riga per ogni CRF provato, con `crf`, `vmaf_medio`, `bitrate_medio_bps` e
+`vmaf_per_segmento[]`; i valori numerici possono essere `null` se la misura non
+è riuscita. Se nessun CRF supera il target, viene usato il CRF impostato
+dall'utente.
 
 ### `PATCH /api/jobs/{job_id}`
 

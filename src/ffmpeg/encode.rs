@@ -32,7 +32,7 @@ pub enum RunOutcome {
 ///
 /// `reset_sar=1` fa sì che `scale` compensi il SAR del sorgente quando calcola
 /// la larghezza automatica (`-2`) e produca pixel quadrati. È disponibile nella
-/// build FFmpeg 8.1.2 usata dall'immagine applicativa.
+/// build FFmpeg 9.0.1 usata dall'immagine applicativa.
 ///
 /// La virgola dentro `min()` va protetta, perché la virgola separa i filtri.
 ///
@@ -69,7 +69,7 @@ fn common_input_args(params: &EncodingParams, input: &Path) -> Vec<OsString> {
     args
 }
 
-fn video_encoder_args(params: &EncodingParams) -> Vec<OsString> {
+pub(crate) fn video_encoder_args(params: &EncodingParams) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec!["-c:v".into(), "libsvtav1".into()];
     // Nessun filtro in modalità dimensione originale: -vf va omesso, non svuotato.
     if let Some(filter) = scale_filter(params.scale_height) {
@@ -216,9 +216,14 @@ pub fn compute_video_bitrate(params: &EncodingParams, info: &MediaInfo) -> Resul
 /// Numero di passaggi ffmpeg richiesti dalla modalità scelta.
 pub fn total_passes(mode: EncodingMode) -> u8 {
     match mode {
-        EncodingMode::Crf => 1,
+        EncodingMode::Crf | EncodingMode::VmafAnalysis => 1,
         EncodingMode::TargetSize => 2,
     }
+}
+
+/// Passaggi mostrati all'utente: la misura VMAF è un passaggio in più.
+pub fn total_passes_with_measure(mode: EncodingMode, measure_vmaf: bool) -> u8 {
+    total_passes(mode) + u8::from(measure_vmaf)
 }
 
 /// Eventi prodotti da un processo ffmpeg in esecuzione.
@@ -549,5 +554,17 @@ mod tests {
     fn passaggi_per_modalita() {
         assert_eq!(total_passes(EncodingMode::Crf), 1);
         assert_eq!(total_passes(EncodingMode::TargetSize), 2);
+        assert_eq!(total_passes(EncodingMode::VmafAnalysis), 1);
+    }
+
+    #[test]
+    fn i_passaggi_includono_la_misura_vmaf() {
+        assert_eq!(total_passes_with_measure(EncodingMode::Crf, true), 2);
+        assert_eq!(total_passes_with_measure(EncodingMode::TargetSize, true), 3);
+        assert_eq!(total_passes_with_measure(EncodingMode::Crf, false), 1);
+        assert_eq!(
+            total_passes_with_measure(EncodingMode::TargetSize, false),
+            2
+        );
     }
 }

@@ -2,14 +2,16 @@
 
 FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS builder
 
-ARG FFMPEG_VERSION=8.1.2
-ARG FFMPEG_SHA256=464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
+ARG FFMPEG_VERSION=9.0.1
+ARG FFMPEG_SHA256=cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635
 ARG SVT_AV1_VERSION=4.2.0
 ARG SVT_AV1_SHA256=512f2ea5649e3e76c2dddcc25c2556fb67a9582baaab207c9c96161c94659dad
-ARG VMAF_VERSION=3.1.0
-ARG VMAF_SHA256=80090e29d7fd0db472ddc663513f5be89bc936815e62b767e630c1d627279fe2
-ARG DAV1D_VERSION=1.5.3
-ARG DAV1D_SHA256=732010aa5ef461fa93355ed2c6c5fedb48ddc4b74e697eaabe8907eaeb943011
+ARG VMAF_VERSION=3.2.0
+ARG VMAF_SHA256=a28f93f3b4fa65601be324587072e32a6a704a304ba7b1aec9b70b3f709bc1dc
+ARG DAV1D_VERSION=1.5.4
+ARG DAV1D_SHA256=686616b7c69eb88d44459391ab25cac13b6647a3b288835c5784e71c1514a5c5
+ARG OPUS_VERSION=1.6.1
+ARG OPUS_SHA256=6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -18,7 +20,6 @@ RUN apt-get update \
         ca-certificates \
         cmake \
         curl \
-        libopus-dev \
         meson \
         nasm \
         ninja-build \
@@ -79,9 +80,26 @@ RUN curl -fL --retry 3 \
         -Denable_tests=false \
         -Denable_docs=false \
         -Denable_tools=false \
+        -Denable_float=true \
         -Dbuilt_in_models=true \
     && meson compile -C vmaf-build \
     && meson install -C vmaf-build
+
+RUN curl -fL --retry 3 \
+        -o opus.tar.gz \
+        "https://downloads.xiph.org/releases/opus/opus-${OPUS_VERSION}.tar.gz" \
+    && printf '%s  %s\n' "${OPUS_SHA256}" opus.tar.gz | sha256sum -c - \
+    && tar -xf opus.tar.gz \
+    && cd "opus-${OPUS_VERSION}" \
+    && ./configure \
+        --prefix=/opt/ffmpeg \
+        --libdir=/opt/ffmpeg/lib \
+        --disable-shared \
+        --enable-static \
+        --disable-doc \
+        --disable-extra-programs \
+    && make -j"$(nproc)" \
+    && make install
 
 ENV PKG_CONFIG_PATH=/opt/ffmpeg/lib/pkgconfig
 
@@ -113,20 +131,17 @@ RUN curl -fL --retry 3 \
 
 FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 
-ARG FFMPEG_VERSION=8.1.2
+ARG FFMPEG_VERSION=9.0.1
 ARG SVT_AV1_VERSION=4.2.0
-ARG VMAF_VERSION=3.1.0
-ARG DAV1D_VERSION=1.5.3
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libopus0 \
-    && rm -rf /var/lib/apt/lists/*
+ARG VMAF_VERSION=3.2.0
+ARG DAV1D_VERSION=1.5.4
+ARG OPUS_VERSION=1.6.1
 
 COPY --from=builder /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=builder /usr/local/bin/ffprobe /usr/local/bin/ffprobe
 
 LABEL org.opencontainers.image.title="FFmpeg with current SVT-AV1"
-LABEL org.opencontainers.image.description="FFmpeg ${FFMPEG_VERSION}, SVT-AV1 ${SVT_AV1_VERSION}, libvmaf ${VMAF_VERSION}, dav1d ${DAV1D_VERSION}, libopus"
+LABEL org.opencontainers.image.description="FFmpeg ${FFMPEG_VERSION}, SVT-AV1 ${SVT_AV1_VERSION}, libvmaf ${VMAF_VERSION}, dav1d ${DAV1D_VERSION}, libopus ${OPUS_VERSION} statico"
 LABEL org.opencontainers.image.source="https://ffmpeg.org/, https://gitlab.com/AOMediaCodec/SVT-AV1, https://github.com/Netflix/vmaf and https://code.videolan.org/videolan/dav1d"
 LABEL org.opencontainers.image.version="${FFMPEG_VERSION}-svt${SVT_AV1_VERSION}-vmaf${VMAF_VERSION}-dav1d${DAV1D_VERSION}"
 

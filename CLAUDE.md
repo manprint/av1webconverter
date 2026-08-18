@@ -49,11 +49,11 @@ Full detail in `docs/architettura.md`; API contract in `docs/api.md`. The parts 
 ## Non-obvious constraints
 
 - **`tune=5` is CRF-only.** `EncodingParams::effective_svtav1_params()` forces `tune=0` in `TargetSize` mode because SVT-AV1 rejects `tune=5` under two-pass VBR. It also needs SVT-AV1 4.x.
-- **The scale filter deliberately differs from the bash scripts.** They use `scale=...:reset_sar=1`, an option added in ffmpeg 7.1. The code emits the equivalent `scale=-2:trunc(min(H\,ih)/2)*2,setsar=1`, which works on older builds too. The comma inside `min()` must stay escaped; the one between the two filters must not.
+- **The scale filter matches the bash scripts.** It uses `scale=...:reset_sar=1`, an option added in ffmpeg 7.1 and present in the FFmpeg 9.0.1 image. The comma inside `min()` must stay escaped; with `scale_height == 0` no scale filter is emitted.
 - **`enable-qm=1:qm-min=0` stays excluded** — it lowered both SSIM and PSNR in the measurements recorded in `README.image.md`.
 - **ffmpeg is spawned without a shell**, args as a vector. Values reaching the command line are still validated against a restricted alphabet (`is_safe_ffmpeg_token`), so `tune=5; rm -rf /` is rejected at the API boundary. Keep that check when adding parameters.
 - **Config env overrides win over the TOML file** (`AV1WC_*`), so the container can be configured without mounting a file. `deny_unknown_fields` + `serde(default)` on config structs means partial JSON from the frontend is fine but typos are errors.
-- **`README.image.md` documents scripts that don't exist here** — `build_ffmpeg_image.sh`, the `*_fixed_dim*` and `*_local*` variants. Treat it as a description of intended behaviour plus the record of the encoding-quality measurements, not as runnable instructions. The only scripts present are `start_av1_docker.sh` and `execute_docker.sh`, kept as the reference for the encoding contract; their SSH half is explicitly out of scope.
+- **`README.image.md` documents the scripts that exist here** — `start_av1_docker.sh` and `execute_docker.sh`. Fixed-size conversion and local web conversion are available through the Rust application and its API, not through additional shell scripts; the SSH half of the reference script remains out of scope.
 
 ## Conventions
 

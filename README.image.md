@@ -2,11 +2,11 @@
 
 L'immagine locale contiene:
 
-- FFmpeg 8.1.2;
+- FFmpeg 9.0.1;
 - SVT-AV1 4.2.0;
-- libvmaf 3.1.0;
-- dav1d 1.5.3 per decodificare e misurare gli output AV1;
-- libopus;
+- libvmaf 3.2.0;
+- dav1d 1.5.4 per decodificare e misurare gli output AV1;
+- libopus 1.6.1 compilato staticamente;
 - `ffprobe`.
 
 Le versioni e le checksum degli archivi sorgente sono fissate in
@@ -15,24 +15,29 @@ Le versioni e le checksum degli archivi sorgente sono fissate in
 ## Build locale
 
 ```bash
-./build_ffmpeg_image.sh
+docker build -f Dockerfile.ffmpeg-svtav1 \
+  -t local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0 .
 ```
 
-Il build esegue anche un encode minimo con `tune=5`, verifica SVT-AV1 4.2.0
-e controlla con due sorgenti identiche che il filtro `libvmaf` produca
-realmente un punteggio.
+La build include FFmpeg 9.0.1, SVT-AV1 4.2.0, libVMAF 3.2.0, dav1d 1.5.4
+e libopus 1.6.1 statico. Per verificare rapidamente i componenti:
+
+```bash
+docker run --rm --entrypoint sh local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0 -c \
+  'ffmpeg -hide_banner -version | head -1; ffmpeg -hide_banner -filters | grep libvmaf'
+```
 
 ## Immagine pubblicata su GHCR
 
 ```bash
-docker pull ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0
+docker pull ghcr.io/manprint/av1webconverter-ffmpeg:9.0.1-svt4.2.0-vmaf3.2.0
 ```
 
 Il workflow attivato dal tag `v1.0.0` pubblica automaticamente questa base
 prima dell'immagine applicativa. Per usarla negli script:
 
 ```bash
-FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0 \
+FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.1-svt4.2.0-vmaf3.2.0 \
 ./execute_docker.sh
 ```
 
@@ -40,18 +45,18 @@ FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0 \
 
 Lo stesso riferimento immagine deve essere disponibile sull'host locale e su
 quello remoto. Il default
-`local/ffmpeg-svtav1:8.1.2-svt4.2.0-vmaf3.1.0` è utile per i
+`local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0` è utile per i
 test locali; per una conversione reale usare il tag pubblicato su GHCR:
 
 ```bash
-FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0 \
+FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.1-svt4.2.0-vmaf3.2.0 \
 ./execute_docker.sh
 ```
 
 Gli output già esistenti vengono saltati. Per sovrascriverli:
 
 ```bash
-FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0 \
+FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.1-svt4.2.0-vmaf3.2.0 \
 OVERWRITE=1 \
 ./execute_docker.sh
 ```
@@ -59,7 +64,7 @@ OVERWRITE=1 \
 I parametri principali sono configurabili senza modificare gli script:
 
 ```bash
-FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0 \
+FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.1-svt4.2.0-vmaf3.2.0 \
 CRF=45 PRESET=5 SVTAV1_PARAMS=tune=5 \
 ./execute_docker.sh
 ```
@@ -74,79 +79,27 @@ superiore (46,314 contro 45,998 dB) e può essere selezionato con
 Le vecchie opzioni `enable-qm=1:qm-min=0` restano escluse perché nei test
 hanno ridotto sia SSIM sia PSNR.
 
-## Conversione con dimensione target
+## Parametri non gestiti dagli script
 
-Per convertire tutti gli MP4 della directory scegliendo la dimensione finale
-di ciascun file:
+Gli script presenti in questo repository gestiscono la modalità CRF. La
+modalità a dimensione target e le relative impostazioni sono disponibili
+nell'applicazione web/API descritta in [README.md](README.md); non esistono
+script separati per fixed-size o conversioni locali.
 
-```bash
-FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0 \
-./execute_docker_fixed_dim.sh 300
-```
-
-Sono accettati sia `300` sia `300MB`. Per un singolo file:
-
-```bash
-FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:8.1.2-svt4.2.0-vmaf3.1.0 \
-./start_av1_docker_fixed_dim.sh film.mp4 300
-```
-
-La codifica usa VBR a due passaggi, preset 3, AV1 10-bit e calcola il bitrate
-video sottraendo dal target le tracce audio Opus. Il default conserva l'1%
-per l'overhead MP4; è modificabile, ad esempio con
-`SIZE_MARGIN_PERCENT=0.5`. SVT-AV1 consente `tune=5` solo in modalità CRF:
-la variante a dimensione fissa usa quindi `tune=0`, compatibile con il
-two-pass VBR.
-
-La dimensione è un target e può variare leggermente per l'overhead del
-contenitore e la precisione del rate control. Se 300 MB è un limite rigido,
-usa per esempio `SIZE_MARGIN_PERCENT=2` per mantenere un margine più ampio.
-
-Entrambe le modalità mostrano durante la codifica percentuale, tempo
-elaborato, numero di frame, dimensione progressiva del file, bitrate,
-velocità ed ETA. L'aggiornamento predefinito avviene ogni 5 secondi; per
-cambiarlo, ad esempio:
+Per cambiare intervallo di progresso nello script CRF:
 
 ```bash
 PROGRESS_INTERVAL=10 ./execute_docker.sh
-PROGRESS_INTERVAL=10 ./execute_docker_fixed_dim.sh 300
 ```
 
 Il ridimensionamento limita l'altezza a `SCALE_HEIGHT` (480 per default),
 mantiene il rapporto d'aspetto visivo del sorgente e normalizza l'output a
 pixel quadrati (`SAR 1:1`), evitando DAR errati con sorgenti anamorfiche.
 
-## Codifica locale con Docker
+La build include i modelli VMAF v1, fra cui `vmaf_v1.0.16_5d0h` per la visione
+su telefono e `vmaf_v1.0.16_3d0h` per la visione su televisore 1080p. Un esempio
+di misura usa `model=version=vmaf_v1.0.16_5d0h`.
 
-Le varianti locali non usano SSH: `ffprobe`, codifica AV1 e remux MP4
-vengono eseguiti nell'immagine Docker configurata con `FFMPEG_IMAGE`.
-
-Qualità costante CRF (bitrate variabile), per tutti gli MP4 della directory:
-
-```bash
-./execute_docker_local.sh
-```
-
-Per un solo file:
-
-```bash
-./start_av1_docker_local.sh film.mp4
-```
-
-Dimensione target con VBR a due passaggi, per tutti gli MP4:
-
-```bash
-./execute_docker_fixed_dim_local.sh 300
-```
-
-Per un solo file:
-
-```bash
-./start_av1_docker_fixed_dim_local.sh film.mp4 300
-```
-
-Le opzioni `SCALE_HEIGHT`, `PRESET`, `CRF`, `AUDIO_BITRATE`,
-`LOCAL_CPUS`, `PROGRESS_INTERVAL`, `OUTPUT_DIR`, `OVERWRITE` e
-`FFMPEG_IMAGE` funzionano come nelle varianti remote. `CRF` si applica
-soltanto alla modalità a qualità costante; `SIZE_MARGIN_PERCENT` soltanto
-alla modalità fixed-size.
+Le opzioni `SCALE_HEIGHT`, `PRESET`, `CRF`, `AUDIO_BITRATE`, `LOCAL_CPUS`,
+`PROGRESS_INTERVAL`, `OUTPUT_DIR`, `OVERWRITE` e `FFMPEG_IMAGE` funzionano come
+nelle varianti documentate sopra.

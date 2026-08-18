@@ -18,9 +18,42 @@ const PARAM_FIELDS = [
     options: [
       ["crf", "Qualità costante (CRF)"],
       ["target_size", "Dimensione target (VBR 2 passaggi)"],
+      ["vmaf_analysis", "Analisi VMAF + Qualità Costante"],
     ],
   },
-  { key: "crf", label: "CRF", type: "number", min: 0, max: 63, mode: "crf" },
+  {
+    key: "crf",
+    label: "CRF",
+    type: "number",
+    min: 0,
+    max: 63,
+    modes: ["crf", "vmaf_analysis"],
+  },
+  {
+    key: "vmaf_segments",
+    label: "VMAF Segments",
+    type: "number",
+    min: 1,
+    max: 10,
+    modes: ["vmaf_analysis"],
+  },
+  {
+    key: "crf_test_steps",
+    label: "CRF Test Steps",
+    type: "number",
+    min: 1,
+    max: 10,
+    modes: ["vmaf_analysis"],
+  },
+  {
+    key: "vmaf_target",
+    label: "VMAF Target",
+    type: "number",
+    min: 0,
+    max: 100,
+    step: 0.5,
+    modes: ["vmaf_analysis"],
+  },
   { key: "target_size_mb", label: "Dimensione target (MB)", type: "number", min: 1, step: 1, mode: "target_size" },
   { key: "size_margin_percent", label: "Margine overhead (%)", type: "number", min: 0, max: 50, step: 0.1, mode: "target_size" },
   { key: "preset", label: "Preset", type: "number", min: 0, max: 13 },
@@ -43,11 +76,18 @@ const PARAM_FIELDS = [
     dynamicOptionLabel: (value) => `${value}px`,
   },
   { key: "audio_bitrate", label: "Bitrate audio", type: "text" },
-  { key: "svtav1_params", label: "svtav1-params", type: "text", mode: "crf" },
+  {
+    key: "svtav1_params",
+    label: "svtav1-params",
+    type: "text",
+    modes: ["crf", "vmaf_analysis"],
+  },
   { key: "pixel_format", label: "Formato pixel", type: "text" },
   { key: "keyint", label: "Keyframe ogni (frame)", type: "number", min: 1, max: 3000 },
   { key: "cpus", label: "Thread ffmpeg", type: "number", min: 1, max: 256, placeholder: "automatico" },
   { key: "progress_interval", label: "Aggiornamento progresso (s)", type: "number", min: 0.5, step: 0.5 },
+  { key: "measure_vmaf", label: "Misura VMAF dopo la conversione", type: "checkbox" },
+  { key: "vmaf_model", label: "Modello VMAF", type: "text" },
   { key: "overwrite", label: "Sovrascrivi gli output già presenti", type: "checkbox" },
 ];
 
@@ -156,7 +196,7 @@ function readParams(root) {
       params[field.key] = fallback[field.key];
     }
   }
-  if (params.mode === "crf") params.target_size_mb = null;
+  if (params.mode !== "target_size") params.target_size_mb = null;
   return params;
 }
 
@@ -194,7 +234,8 @@ function writeParams(root, params) {
 function applyModeVisibility(root) {
   const mode = root.querySelector('[name="mode"]')?.value ?? "crf";
   root.querySelectorAll("[data-mode]").forEach((node) => {
-    node.classList.toggle("hidden", node.dataset.mode !== mode);
+    const modes = node.dataset.mode.split(/\s+/).filter(Boolean);
+    node.classList.toggle("hidden", !modes.includes(mode));
   });
 }
 
@@ -234,7 +275,8 @@ function buildParamsEditor(job) {
     ]
       .filter(Boolean)
       .join(" ");
-    if (field.mode) node.dataset.mode = field.mode;
+    const modes = field.modes ?? (field.mode ? [field.mode] : []);
+    if (modes.length) node.dataset.mode = modes.join(" ");
 
     if (field.type === "select") {
       const options = field.options
@@ -369,6 +411,8 @@ function renderFileRow(job, file) {
     <td>
       <span class="file-detail">in ${formatSize(file.input_size_bytes)}</span>
       <span class="file-detail">out ${formatSize(file.output_size_bytes)}</span>
+       ${file.vmaf ? `<span class="file-detail">${vmafText(file.vmaf)}</span>` : ""}
+       ${file.vmaf_analysis ? `<span class="file-detail" title="${escapeHtml(analisiTooltip(file.vmaf_analysis))}">${analisiText(file.vmaf_analysis)}</span>` : ""}
     </td>
     <td class="col-actions">
       <div class="row-actions">
@@ -391,6 +435,34 @@ function fileProgressText(file, passLabel) {
     return `terminato ${formatDateTime(file.finished_at)}`;
   }
   return FILE_STATUS_LABEL[file.status] ?? file.status;
+}
+
+/** Punteggio VMAF del file, o il motivo per cui manca. */
+function vmafText(vmaf) {
+  if (vmaf.error) return `VMAF non disponibile: ${escapeHtml(vmaf.error)}`;
+  if (typeof vmaf.score !== "number") return "VMAF non disponibile";
+  return `VMAF ${vmaf.score.toFixed(2)} (${escapeHtml(vmaf.model)})`;
+}
+
+/** Esito dell'analisi: CRF scelto e motivo della scelta. */
+function analisiText(analisi) {
+  const nota = {
+    sopra_soglia: "",
+    tutti_sopra_soglia: " (tutti gli step sopra il target)",
+    nessuno_sopra_soglia: " (nessuno step sopra il target: usato il CRF impostato)",
+    analisi_non_eseguibile: " (analisi non eseguibile)",
+  }[analisi.motivo] ?? "";
+  return `analisi VMAF: CRF ${escapeHtml(analisi.crf_scelto)}, target ${escapeHtml(analisi.target)}${nota}`;
+}
+
+/** Dettaglio per CRF mostrato nel tooltip della riga del file. */
+function analisiTooltip(analisi) {
+  const risultati = Array.isArray(analisi.risultati) ? analisi.risultati : [];
+  const righe = risultati.map((risultato) => {
+    const vmaf = typeof risultato.vmaf_medio === "number" ? risultato.vmaf_medio.toFixed(2) : "N/D";
+    return `CRF ${risultato.crf}: VMAF ${vmaf}`;
+  });
+  return righe.length ? righe.join("\n") : "nessun risultato VMAF";
 }
 
 function escapeHtml(value) {

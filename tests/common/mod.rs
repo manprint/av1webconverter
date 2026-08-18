@@ -90,7 +90,7 @@ pub async fn start() -> TestServer {
 
 /// Vero se ffmpeg e ffprobe offrono le funzionalità richieste dal runtime:
 /// libsvtav1 e l'opzione `reset_sar` del filtro scale, presenti nell'immagine
-/// custom basata su FFmpeg 8.1.2.
+/// custom basata su FFmpeg 9.0.1.
 pub fn ffmpeg_with_svtav1() -> bool {
     let encoders = std::process::Command::new("ffmpeg")
         .args(["-hide_banner", "-encoders"])
@@ -111,6 +111,20 @@ pub fn ffmpeg_with_svtav1() -> bool {
     }
 }
 
+/// I test di misura richiedono un ffmpeg con il filtro `libvmaf`, assente in
+/// molte build di sistema.
+pub fn ffmpeg_with_libvmaf() -> bool {
+    let filters = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-filters"])
+        .output();
+    match filters {
+        Ok(output) => {
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("libvmaf")
+        }
+        Err(_) => false,
+    }
+}
+
 /// Genera un MP4 di prova con traccia video e audio.
 pub fn make_test_video(path: &Path, seconds: u32) {
     let status = std::process::Command::new("ffmpeg")
@@ -119,7 +133,7 @@ pub fn make_test_video(path: &Path, seconds: u32) {
             "-f",
             "lavfi",
             "-i",
-            &format!("testsrc=duration={seconds}:size=320x240:rate=10"),
+            &format!("testsrc=duration={seconds}:size=640x360:rate=10"),
         ])
         .args([
             "-f",

@@ -67,6 +67,62 @@ pub struct Progress {
     pub total_passes: u8,
 }
 
+/// Esito della misura di qualità VMAF di un file convertito.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct VmafMeasurement {
+    /// Media aggregata (`pooled_metrics.vmaf.mean`), assente se la misura è fallita.
+    pub score: Option<f64>,
+    pub min: Option<f64>,
+    pub harmonic_mean: Option<f64>,
+    /// Modello effettivamente usato, per rendere il numero confrontabile.
+    pub model: String,
+    /// Secondi impiegati dalla misura, utili a valutarne il costo.
+    pub duration_seconds: f64,
+    /// Motivo del fallimento quando la misura non ha prodotto un punteggio.
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MotivoScelta {
+    /// Almeno un CRF sopra soglia e almeno uno sotto: scelta nel mezzo.
+    SopraSoglia,
+    /// Tutti i CRF provati restano sopra soglia: scelto il più alto.
+    TuttiSopraSoglia,
+    /// Nessun CRF provato raggiunge la soglia: si usa quello impostato.
+    NessunoSopraSoglia,
+    /// Nessuna misura valida: si usa il CRF impostato.
+    AnalisiNonEseguibile,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RisultatoCrf {
+    pub crf: u8,
+    pub vmaf_medio: Option<f64>,
+    pub bitrate_medio_bps: Option<u64>,
+    pub vmaf_per_segmento: Vec<Option<f64>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SegmentoAnalisiPersistito {
+    pub indice: u32,
+    pub inizio_secondi: f64,
+    pub durata_secondi: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VmafAnalysis {
+    pub crf_scelto: u8,
+    pub crf_di_partenza: u8,
+    pub target: f64,
+    pub modello: String,
+    pub motivo: MotivoScelta,
+    pub segmenti: Vec<SegmentoAnalisiPersistito>,
+    pub risultati: Vec<RisultatoCrf>,
+    pub duration_seconds: f64,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobFile {
     pub id: Uuid,
@@ -81,6 +137,13 @@ pub struct JobFile {
     pub status: FileStatus,
     pub progress: Progress,
     pub error: Option<String>,
+    /// Assente sui job creati prima dell'introduzione della misura e su
+    /// quelli che non l'hanno richiesta.
+    #[serde(default)]
+    pub vmaf: Option<VmafMeasurement>,
+    /// Presente solo per i file convertiti in modalità di analisi.
+    #[serde(default)]
+    pub vmaf_analysis: Option<VmafAnalysis>,
     #[serde(with = "time::serde::rfc3339")]
     pub uploaded_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -107,6 +170,8 @@ impl JobFile {
             status: FileStatus::Pending,
             progress: Progress::default(),
             error: None,
+            vmaf: None,
+            vmaf_analysis: None,
             uploaded_at: OffsetDateTime::now_utc(),
             started_at: None,
             finished_at: None,
@@ -298,5 +363,51 @@ mod tests {
         assert_eq!(counts.completed, 1);
         assert_eq!(counts.failed, 1);
         assert_eq!(counts.pending, 1);
+    }
+
+    #[test]
+    fn un_job_file_senza_campo_vmaf_resta_leggibile() {
+        let file = JobFile::new(
+            "video.mp4".into(),
+            "video.mp4".into(),
+            PathBuf::from("in/video.mp4"),
+            123,
+        );
+        let mut json = serde_json::to_value(&file).unwrap();
+        json.as_object_mut().unwrap().remove("vmaf");
+        let deserialized: JobFile = serde_json::from_value(json).unwrap();
+        assert!(deserialized.vmaf.is_none());
+    }
+
+    #[test]
+    fn la_misura_vmaf_viene_serializzata() {
+        let mut file = JobFile::new(
+            "video.mp4".into(),
+            "video.mp4".into(),
+            PathBuf::from("in/video.mp4"),
+            123,
+        );
+        file.vmaf = Some(VmafMeasurement {
+            score: Some(95.5),
+            model: "vmaf_v1.0.16_5d0h".into(),
+            ..Default::default()
+        });
+        let json = serde_json::to_string(&file).unwrap();
+        assert!(json.contains("\"score\":95.5"));
+        assert!(json.contains("vmaf_v1.0.16_5d0h"));
+    }
+
+    #[test]
+    fn un_job_file_senza_analisi_resta_leggibile() {
+        let file = JobFile::new(
+            "video.mp4".into(),
+            "video.mp4".into(),
+            PathBuf::from("in/video.mp4"),
+            123,
+        );
+        let mut json = serde_json::to_value(&file).unwrap();
+        json.as_object_mut().unwrap().remove("vmaf_analysis");
+        let deserialized: JobFile = serde_json::from_value(json).unwrap();
+        assert!(deserialized.vmaf_analysis.is_none());
     }
 }

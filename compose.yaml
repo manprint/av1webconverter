@@ -131,6 +131,13 @@ services:
       AV1WC_SVTAV1_PARAMS: "${AV1WC_SVTAV1_PARAMS:-tune=5}"
       # Intervallo degli aggiornamenti di progresso, secondi > 0 anche decimali.
       AV1WC_PROGRESS_INTERVAL: "${AV1WC_PROGRESS_INTERVAL:-5.0}"
+      # Misura VMAF opzionale sull'output definitivo; default disattivata.
+      AV1WC_MEASURE_VMAF: "${AV1WC_MEASURE_VMAF:-false}"
+      AV1WC_VMAF_MODEL: "${AV1WC_VMAF_MODEL:-vmaf_v1.0.16_5d0h}"
+      # Parametri usati solo da mode=vmaf_analysis.
+      AV1WC_VMAF_SEGMENTS: "${AV1WC_VMAF_SEGMENTS:-3}"
+      AV1WC_CRF_TEST_STEPS: "${AV1WC_CRF_TEST_STEPS:-3}"
+      AV1WC_VMAF_TARGET: "${AV1WC_VMAF_TARGET:-93.0}"
 
     restart: unless-stopped
     init: true

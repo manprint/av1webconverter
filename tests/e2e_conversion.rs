@@ -30,6 +30,71 @@ async fn upload_file(
     response.json().await.unwrap()
 }
 
+async fn start_analysis_job(
+    server: &common::TestServer,
+    source: &std::path::Path,
+    name: &str,
+    vmaf_segments: u32,
+    crf_test_steps: u32,
+    vmaf_target: f64,
+) -> (String, String) {
+    let job: serde_json::Value = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({
+            "name": name,
+            "params": {
+                "mode": "vmaf_analysis",
+                "crf": 40,
+                "crf_test_steps": crf_test_steps,
+                "vmaf_segments": vmaf_segments,
+                "vmaf_target": vmaf_target,
+                "preset": 12,
+                "scale_height": 480,
+                "cpus": 1
+            }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    let uploaded = upload_file(server, &job_id, "sorgente.mp4", source).await;
+    let file_id = uploaded["job"]["files"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let response = server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/start")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    (job_id, file_id)
+}
+
+async fn file_log_text(server: &common::TestServer, job_id: &str, file_id: &str) -> String {
+    let log: serde_json::Value = server
+        .client
+        .get(server.url(&format!("/api/jobs/{job_id}/files/{file_id}/log")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    log["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line.as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[tokio::test]
 async fn conversione_crf_dall_upload_al_download() {
     if !common::ffmpeg_with_svtav1() {
@@ -654,4 +719,324 @@ async fn un_sorgente_non_valido_fa_fallire_solo_il_suo_file() {
         .join(&job_id)
         .join("buono_av1.mp4")
         .exists());
+}
+
+#[tokio::test]
+async fn la_misura_vmaf_produce_un_punteggio_e_non_altera_l_output() {
+    if !common::ffmpeg_with_svtav1() || !common::ffmpeg_with_libvmaf() {
+        eprintln!("ffmpeg con SVT-AV1, reset_sar e libvmaf non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("sorgente-vmaf.mp4");
+    common::make_test_video(&source, 5);
+
+    let create_client = server.client.clone();
+    let create_base_url = server.base_url.clone();
+    let create = move |name: String, measure_vmaf| {
+        let client = create_client.clone();
+        let url = format!("{create_base_url}/api/jobs");
+        async move {
+            client
+                .post(url)
+                .json(&json!({
+                    "name": name,
+                    "params": {
+                        "measure_vmaf": measure_vmaf,
+                        "scale_height": 720,
+                        "cpus": 1
+                    }
+                }))
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+        }
+    };
+
+    let without = create("senza misura".into(), false).await;
+    let without_id = without["id"].as_str().unwrap().to_string();
+    upload_file(&server, &without_id, "senza.mp4", &source).await;
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{without_id}/start")))
+        .send()
+        .await
+        .unwrap();
+    let without_job =
+        common::wait_for_job_status(&server, &without_id, Duration::from_secs(300)).await;
+    assert_eq!(without_job["status"], "completed", "{without_job}");
+    let without_output = server.output_dir.join(&without_id).join("senza_av1.mp4");
+    let without_bytes = std::fs::read(&without_output).expect("output senza misura");
+
+    let with = create("con misura".into(), true).await;
+    let with_id = with["id"].as_str().unwrap().to_string();
+    let uploaded = upload_file(&server, &with_id, "con.mp4", &source).await;
+    let file_id = uploaded["job"]["files"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{with_id}/start")))
+        .send()
+        .await
+        .unwrap();
+    let with_job = common::wait_for_job_status(&server, &with_id, Duration::from_secs(300)).await;
+
+    assert_eq!(with_job["status"], "completed", "{with_job}");
+    assert_eq!(with_job["files"][0]["status"], "completed");
+    let vmaf = &with_job["files"][0]["vmaf"];
+    assert_eq!(vmaf["model"], "vmaf_v1.0.16_5d0h");
+    let score = vmaf["score"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("punteggio VMAF assente: {with_job}"));
+    assert!(score > 0.0 && score <= 100.0, "punteggio inatteso: {score}");
+    assert!(vmaf["error"].is_null());
+    assert!(vmaf["duration_seconds"].as_f64().unwrap() > 0.0);
+
+    let with_output = server.output_dir.join(&with_id).join("con_av1.mp4");
+    assert_eq!(without_bytes, std::fs::read(&with_output).unwrap());
+
+    let log: serde_json::Value = server
+        .client
+        .get(server.url(&format!("/api/jobs/{with_id}/files/{file_id}/log")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(log["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|line| line.as_str().unwrap().contains("VMAF")));
+}
+
+#[tokio::test]
+async fn una_misura_vmaf_fallita_non_fa_fallire_il_file() {
+    if !common::ffmpeg_with_svtav1() || !common::ffmpeg_with_libvmaf() {
+        eprintln!("ffmpeg con SVT-AV1, reset_sar e libvmaf non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("sorgente-vmaf-errore.mp4");
+    common::make_test_video(&source, 2);
+    let job: serde_json::Value = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({
+            "name": "modello VMAF inesistente",
+            "params": {
+                "measure_vmaf": true,
+                "vmaf_model": "vmaf_modello_inesistente"
+            }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    upload_file(&server, &job_id, "errore.mp4", &source).await;
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/start")))
+        .send()
+        .await
+        .unwrap();
+
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "{job}");
+    assert_eq!(job["files"][0]["status"], "completed");
+    assert!(server
+        .output_dir
+        .join(&job_id)
+        .join("errore_av1.mp4")
+        .exists());
+    assert!(common::video_codec(&server.output_dir.join(&job_id).join("errore_av1.mp4")) == "av1");
+    assert!(job["files"][0]["vmaf"]["score"].is_null());
+    assert!(job["files"][0]["vmaf"]["error"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn la_misura_vmaf_gestisce_un_sorgente_anamorfico() {
+    if !common::ffmpeg_with_svtav1() || !common::ffmpeg_with_libvmaf() {
+        eprintln!("ffmpeg con SVT-AV1, reset_sar e libvmaf non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("sorgente-anamorfico-vmaf.mp4");
+    common::make_anamorphic_video(&source, 2);
+    let job: serde_json::Value = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({
+            "name": "anamorfico VMAF",
+            "params": { "scale_height": 480, "measure_vmaf": true }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    upload_file(&server, &job_id, "anamorfico.mp4", &source).await;
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/start")))
+        .send()
+        .await
+        .unwrap();
+
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "{job}");
+    assert_eq!(job["files"][0]["status"], "completed");
+    let score = job["files"][0]["vmaf"]["score"]
+        .as_f64()
+        .expect("punteggio VMAF anamorfico");
+    assert!(score > 0.0 && score <= 100.0, "punteggio inatteso: {score}");
+}
+
+#[tokio::test]
+async fn la_modalita_di_analisi_sceglie_il_crf_e_lo_usa() {
+    if !common::ffmpeg_with_svtav1() || !common::ffmpeg_with_libvmaf() {
+        eprintln!("ffmpeg con SVT-AV1, reset_sar e libvmaf non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("analisi-120s.mp4");
+    common::make_test_video(&source, 120);
+    let (job_id, file_id) =
+        start_analysis_job(&server, &source, "analisi completa", 3, 3, 93.0).await;
+
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(900)).await;
+    assert_eq!(job["status"], "completed", "job non completato: {job}");
+    assert_eq!(job["files"][0]["status"], "completed");
+    let output_path = server.output_dir.join(&job_id).join("sorgente_av1.mp4");
+    assert!(output_path.exists());
+    assert_eq!(common::video_codec(&output_path), "av1");
+
+    let analisi = &job["files"][0]["vmaf_analysis"];
+    assert_eq!(analisi["crf_di_partenza"], 40);
+    let risultati = analisi["risultati"].as_array().unwrap();
+    assert_eq!(risultati.len(), 3);
+    assert_eq!(risultati[0]["crf"], 42);
+    assert_eq!(risultati[1]["crf"], 44);
+    assert_eq!(risultati[2]["crf"], 46);
+    for risultato in risultati {
+        assert_eq!(risultato["vmaf_per_segmento"].as_array().unwrap().len(), 3);
+    }
+
+    let target = analisi["target"].as_f64().unwrap();
+    let validi: Vec<&serde_json::Value> = risultati
+        .iter()
+        .filter(|risultato| risultato["vmaf_medio"].as_f64().unwrap() >= target)
+        .collect();
+    let crf_scelto = analisi["crf_scelto"].as_u64().unwrap();
+    let motivo = analisi["motivo"].as_str().unwrap();
+    if let Some(expected) = validi
+        .iter()
+        .map(|risultato| risultato["crf"].as_u64().unwrap())
+        .max()
+    {
+        assert_eq!(crf_scelto, expected);
+        assert_eq!(
+            motivo,
+            if validi.len() == risultati.len() {
+                "tutti_sopra_soglia"
+            } else {
+                "sopra_soglia"
+            }
+        );
+    } else {
+        assert_eq!(crf_scelto, 40);
+        assert_eq!(motivo, "nessuno_sopra_soglia");
+    }
+
+    let log = file_log_text(&server, &job_id, &file_id).await;
+    let riga_scelta = log
+        .lines()
+        .find(|line| line.contains("Analisi VMAF - CRF scelto:"))
+        .expect("riga CRF scelto assente nel log");
+    assert!(riga_scelta.contains("Analisi VMAF - CRF scelto:"));
+    assert!(
+        riga_scelta.contains(&format!("CRF scelto: {crf_scelto}")),
+        "{riga_scelta}"
+    );
+    let riga_codifica = log
+        .lines()
+        .find(|line| line.contains("Codifica finale Analisi VMAF con CRF"))
+        .expect("CRF codifica finale assente nel log");
+    assert!(
+        riga_codifica.ends_with(&format!("CRF {crf_scelto}")),
+        "{riga_codifica}"
+    );
+}
+
+#[tokio::test]
+async fn un_file_corto_viene_analizzato_per_intero() {
+    if !common::ffmpeg_with_svtav1() || !common::ffmpeg_with_libvmaf() {
+        eprintln!("ffmpeg con SVT-AV1, reset_sar e libvmaf non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("analisi-corta.mp4");
+    common::make_test_video(&source, 10);
+    let (job_id, _file_id) =
+        start_analysis_job(&server, &source, "analisi file corto", 3, 1, 93.0).await;
+
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(600)).await;
+    assert_eq!(job["status"], "completed", "job non completato: {job}");
+    let segmenti = job["files"][0]["vmaf_analysis"]["segmenti"]
+        .as_array()
+        .unwrap();
+    assert_eq!(segmenti.len(), 1);
+    assert_eq!(segmenti[0]["inizio_secondi"], 0.0);
+    let durata = segmenti[0]["durata_secondi"].as_f64().unwrap();
+    assert!(
+        (9.0..=10.5).contains(&durata),
+        "durata segmento inattesa: {durata}"
+    );
+}
+
+#[tokio::test]
+async fn un_target_inarrivabile_ripiega_sul_crf_impostato() {
+    if !common::ffmpeg_with_svtav1() || !common::ffmpeg_with_libvmaf() {
+        eprintln!("ffmpeg con SVT-AV1, reset_sar e libvmaf non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("analisi-fallback-120s.mp4");
+    common::make_test_video(&source, 120);
+    let (job_id, file_id) =
+        start_analysis_job(&server, &source, "target irraggiungibile", 3, 3, 99.9).await;
+
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(900)).await;
+    assert_eq!(job["status"], "completed", "job non completato: {job}");
+    let analisi = &job["files"][0]["vmaf_analysis"];
+    assert_eq!(analisi["motivo"], "nessuno_sopra_soglia");
+    assert_eq!(analisi["crf_scelto"], 40);
+
+    let log = file_log_text(&server, &job_id, &file_id).await;
+    let riga_scelta = log
+        .lines()
+        .find(|line| line.contains("Analisi VMAF - CRF scelto:"))
+        .expect("riga CRF scelto assente nel log");
+    assert!(riga_scelta.contains("CRF scelto: 40"), "{riga_scelta}");
+    assert!(
+        riga_scelta.contains("si usa il CRF impostato dall'utente"),
+        "{riga_scelta}"
+    );
 }

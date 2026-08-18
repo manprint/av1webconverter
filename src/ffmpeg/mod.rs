@@ -4,6 +4,7 @@
 pub mod encode;
 pub mod probe;
 pub mod progress;
+pub mod vmaf;
 
 pub use encode::{FfmpegEvent, RunOutcome};
 pub use probe::MediaInfo;

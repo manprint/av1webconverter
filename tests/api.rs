@@ -100,6 +100,109 @@ async fn i_default_arrivano_dalla_configurazione() {
         .any(|value| value == "mp4"));
 }
 
+#[tokio::test]
+async fn i_default_espongono_i_parametri_vmaf() {
+    let server = common::start().await;
+    let body: serde_json::Value = server
+        .client
+        .get(server.url("/api/defaults"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(body["params"]["measure_vmaf"], false);
+    assert_eq!(body["params"]["vmaf_model"], "vmaf_v1.0.16_5d0h");
+}
+
+#[tokio::test]
+async fn i_default_espongono_i_parametri_di_analisi() {
+    let server = common::start().await;
+    let body: serde_json::Value = server
+        .client
+        .get(server.url("/api/defaults"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(body["params"]["vmaf_segments"], 3);
+    assert_eq!(body["params"]["crf_test_steps"], 3);
+    assert_eq!(body["params"]["vmaf_target"], 93.0);
+}
+
+#[tokio::test]
+async fn un_job_in_modalita_analisi_viene_accettato() {
+    let server = common::start().await;
+    let response = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({
+            "name": "analisi API",
+            "params": { "mode": "vmaf_analysis" }
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(response.status().is_success());
+    let job: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(job["params"]["mode"], "vmaf_analysis");
+}
+
+#[tokio::test]
+async fn i_parametri_di_analisi_fuori_intervallo_sono_rifiutati() {
+    let server = common::start().await;
+    for params in [
+        json!({ "vmaf_segments": 0 }),
+        json!({ "crf_test_steps": 11 }),
+        json!({ "vmaf_target": 150.0 }),
+    ] {
+        let response = server
+            .client
+            .post(server.url("/api/jobs"))
+            .json(&json!({ "name": "parametro non valido", "params": params }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400, "parametri accettati: {params}");
+    }
+}
+
+#[tokio::test]
+async fn un_file_appena_caricato_non_ha_analisi_vmaf() {
+    let server = common::start().await;
+    let job_id = create_job(&server, "upload senza analisi").await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (content_type, body) = common::multipart_body("files", "film.mp4", b"contenuto mp4");
+
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/files")))
+        .header("content-type", content_type)
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+
+    let job: serde_json::Value = server
+        .client
+        .get(server.url(&format!("/api/jobs/{job_id}")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(job["files"][0]["vmaf_analysis"].is_null());
+}
+
 async fn create_job(server: &common::TestServer, name: &str) -> serde_json::Value {
     let response = server
         .client
@@ -126,6 +229,53 @@ async fn creazione_job_usa_i_default_e_crea_le_cartelle() {
     let job_id = job["id"].as_str().unwrap();
     assert!(server.input_dir.join(job_id).is_dir());
     assert!(server.output_dir.join(job_id).is_dir());
+}
+
+#[tokio::test]
+async fn un_file_appena_caricato_non_ha_misura_vmaf() {
+    let server = common::start().await;
+    let job_id = create_job(&server, "upload senza vmaf").await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (content_type, body) = common::multipart_body("files", "film.mp4", b"contenuto mp4");
+
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/files")))
+        .header("content-type", content_type)
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+
+    let job: serde_json::Value = server
+        .client
+        .get(server.url(&format!("/api/jobs/{job_id}")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(job["files"][0]["vmaf"].is_null());
+}
+
+#[tokio::test]
+async fn un_modello_vmaf_non_valido_viene_rifiutato() {
+    let server = common::start().await;
+    let response = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({
+            "name": "modello non valido",
+            "params": { "vmaf_model": "vmaf; rm -rf /" }
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 400);
 }
 
 #[tokio::test]
