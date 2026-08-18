@@ -9,10 +9,6 @@ use crate::config::EncodingParams;
 use crate::ffmpeg::encode::video_encoder_args;
 use crate::models::{MotivoScelta, RisultatoCrf, VmafAnalysis};
 
-/// Durata fissa di ogni spezzone sondato. Non configurabile: la leva offerta
-/// all'utente è il numero di segmenti.
-pub const DURATA_SEGMENTO_SECONDI: f64 = 30.0;
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SegmentoAnalisi {
     pub indice: u32,
@@ -26,8 +22,9 @@ pub fn segmenti_da_analizzare(
     durata_secondi: f64,
     richiesti: u32,
     entropia: &[u8; 16],
+    durata_segmento: f64,
 ) -> Vec<SegmentoAnalisi> {
-    if durata_secondi <= DURATA_SEGMENTO_SECONDI {
+    if durata_secondi <= durata_segmento {
         return vec![SegmentoAnalisi {
             indice: 0,
             inizio_secondi: 0.0,
@@ -38,26 +35,26 @@ pub fn segmenti_da_analizzare(
     let inizio_utile = durata_secondi * 0.05;
     let fine_utile = durata_secondi * 0.95;
     let finestra = fine_utile - inizio_utile;
-    if finestra < DURATA_SEGMENTO_SECONDI {
+    if finestra < durata_segmento {
         return vec![SegmentoAnalisi {
             indice: 0,
             inizio_secondi: inizio_utile,
-            durata_secondi: DURATA_SEGMENTO_SECONDI.min(durata_secondi - inizio_utile),
+            durata_secondi: durata_segmento.min(durata_secondi - inizio_utile),
         }];
     }
 
-    let massimo = (finestra / DURATA_SEGMENTO_SECONDI).floor() as u32;
+    let massimo = (finestra / durata_segmento).floor() as u32;
     let n = richiesti.min(massimo).max(1);
     let blocco = finestra / n as f64;
     (0..n)
         .map(|i| {
-            let margine = (blocco - DURATA_SEGMENTO_SECONDI).max(0.0);
+            let margine = (blocco - durata_segmento).max(0.0);
             let offset = margine * (entropia[i as usize % 16] as f64 / 255.0);
             let inizio = inizio_utile + i as f64 * blocco + offset;
             SegmentoAnalisi {
                 indice: i,
                 inizio_secondi: inizio,
-                durata_secondi: DURATA_SEGMENTO_SECONDI.min(fine_utile - inizio),
+                durata_secondi: durata_segmento.min(fine_utile - inizio),
             }
         })
         .collect()
@@ -395,7 +392,7 @@ mod tests {
 
     #[test]
     fn i_segmenti_escludono_testa_e_coda() {
-        let segmenti = segmenti_da_analizzare(600.0, 3, &[0; 16]);
+        let segmenti = segmenti_da_analizzare(600.0, 3, &[0; 16], 30.0);
         assert_eq!(segmenti.len(), 3);
         assert!(segmenti[0].inizio_secondi >= 30.0);
         let ultimo = segmenti.last().unwrap();
@@ -404,7 +401,7 @@ mod tests {
 
     #[test]
     fn i_segmenti_non_si_sovrappongono() {
-        let segmenti = segmenti_da_analizzare(600.0, 3, &[127; 16]);
+        let segmenti = segmenti_da_analizzare(600.0, 3, &[127; 16], 30.0);
         for coppia in segmenti.windows(2) {
             assert!(
                 coppia[1].inizio_secondi >= coppia[0].inizio_secondi + coppia[0].durata_secondi
@@ -414,13 +411,13 @@ mod tests {
 
     #[test]
     fn il_numero_di_segmenti_si_riduce_se_la_durata_non_basta() {
-        assert!(segmenti_da_analizzare(100.0, 5, &[0; 16]).len() <= 3);
+        assert!(segmenti_da_analizzare(100.0, 5, &[0; 16], 30.0).len() <= 3);
     }
 
     #[test]
     fn un_file_corto_diventa_un_unico_segmento() {
         assert_eq!(
-            segmenti_da_analizzare(10.0, 5, &[0; 16]),
+            segmenti_da_analizzare(10.0, 5, &[0; 16], 30.0),
             vec![SegmentoAnalisi {
                 indice: 0,
                 inizio_secondi: 0.0,
@@ -430,10 +427,17 @@ mod tests {
     }
 
     #[test]
+    fn la_durata_del_segmento_e_configurabile() {
+        let segmenti = segmenti_da_analizzare(60.0, 1, &[0; 16], 15.0);
+        assert_eq!(segmenti.len(), 1);
+        assert_eq!(segmenti[0].durata_secondi, 15.0);
+    }
+
+    #[test]
     fn gli_stessi_byte_danno_gli_stessi_segmenti() {
-        let primi = segmenti_da_analizzare(600.0, 3, &[1; 16]);
-        assert_eq!(primi, segmenti_da_analizzare(600.0, 3, &[1; 16]));
-        assert_ne!(primi, segmenti_da_analizzare(600.0, 3, &[2; 16]));
+        let primi = segmenti_da_analizzare(600.0, 3, &[1; 16], 30.0);
+        assert_eq!(primi, segmenti_da_analizzare(600.0, 3, &[1; 16], 30.0));
+        assert_ne!(primi, segmenti_da_analizzare(600.0, 3, &[2; 16], 30.0));
     }
 
     fn probe_request() -> SondaRequest<'static> {

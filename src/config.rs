@@ -64,6 +64,8 @@ pub struct EncodingParams {
     pub crf_test_steps: u32,
     /// Qualità media minima che il CRF scelto deve garantire.
     pub vmaf_target: f64,
+    /// Durata degli spezzoni sondati in modalità di analisi, in secondi.
+    pub vmaf_segment_duration_seconds: f64,
 }
 
 impl Default for EncodingParams {
@@ -88,6 +90,7 @@ impl Default for EncodingParams {
             vmaf_segments: 3,
             crf_test_steps: 3,
             vmaf_target: 93.0,
+            vmaf_segment_duration_seconds: 30.0,
         }
     }
 }
@@ -131,6 +134,11 @@ impl EncodingParams {
         }
         if !self.vmaf_target.is_finite() || !(0.0..=100.0).contains(&self.vmaf_target) {
             return Err("vmaf_target deve essere compreso fra 0 e 100".into());
+        }
+        if !(self.vmaf_segment_duration_seconds.is_finite()
+            && (1.0..=300.0).contains(&self.vmaf_segment_duration_seconds))
+        {
+            return Err("vmaf_segment_duration_seconds deve essere compreso fra 1 e 300".into());
         }
         if self.keyint == 0 || self.keyint > 3000 {
             return Err("keyint deve essere compreso fra 1 e 3000".into());
@@ -509,6 +517,11 @@ impl Config {
                 self.encoding.vmaf_target = parsed;
             }
         }
+        if let Ok(value) = var("AV1WC_VMAF_SEGMENT_DURATION_SECONDS") {
+            if let Ok(parsed) = value.parse::<f64>() {
+                self.encoding.vmaf_segment_duration_seconds = parsed;
+            }
+        }
     }
 
     fn validate(&self) -> Result<()> {
@@ -613,6 +626,7 @@ mod tests {
         assert_eq!(params.vmaf_segments, 3);
         assert_eq!(params.crf_test_steps, 3);
         assert_eq!(params.vmaf_target, 93.0);
+        assert_eq!(params.vmaf_segment_duration_seconds, 30.0);
     }
 
     #[test]
@@ -627,6 +641,11 @@ mod tests {
         assert!(params.validate().is_err());
         params.crf_test_steps = 3;
         params.vmaf_target = 150.0;
+        assert!(params.validate().is_err());
+        params.vmaf_target = 93.0;
+        params.vmaf_segment_duration_seconds = 0.5;
+        assert!(params.validate().is_err());
+        params.vmaf_segment_duration_seconds = 301.0;
         assert!(params.validate().is_err());
     }
 

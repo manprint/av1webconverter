@@ -156,6 +156,7 @@ poter configurare il container senza montare un TOML. Le più usate:
 | `AV1WC_VMAF_SEGMENTS`      | segmenti analizzati in modalità VMAF              |
 | `AV1WC_CRF_TEST_STEPS`     | CRF aggiuntivi provati in modalità VMAF           |
 | `AV1WC_VMAF_TARGET`        | VMAF medio minimo richiesto                        |
+| `AV1WC_VMAF_SEGMENT_DURATION_SECONDS` | durata spezzone VMAF in secondi; default 30, Compose 15 |
 | `AV1WC_LOG_LEVEL`          | filtro dei log applicativi                         |
 
 ## Parametri di conversione
@@ -172,7 +173,7 @@ obiettivo, non un limite rigido: per un vincolo stretto alzare il margine (es.
 `size_margin_percent = 2`).
 
 **`vmaf_analysis` — Analisi VMAF + Qualità Costante.** Parte dal `crf` impostato,
-prova CRF crescenti di 2 in 2 su spezzoni casuali da 30 secondi e usa per la
+prova CRF crescenti di 2 in 2 su spezzoni casuali della durata configurata e usa per la
 conversione il CRF più alto che mantiene il VMAF medio almeno pari a
 `vmaf_target`. Ogni CRF viene misurato su tutti i segmenti; se nessuno supera la
 soglia viene usato il CRF impostato. Fuori da questa modalità non vengono eseguite
@@ -297,12 +298,15 @@ specifici:
 
 | Parametro | Default | Intervallo | Effetto |
 |-----------|---------|------------|---------|
-| `vmaf_segments` | `3` | `1..=10` | numero di spezzoni casuali da 30 secondi |
+| `vmaf_segments` | `3` | `1..=10` | numero di spezzoni casuali |
+| `vmaf_segment_duration_seconds` | `30.0` | `1..=300` | durata di ogni spezzone in secondi |
 | `crf_test_steps` | `3` | `1..=10` | numero di CRF aggiuntivi, a passi di 2 |
 | `vmaf_target` | `93.0` | `0..=100` | VMAF medio minimo per accettare un CRF |
 
-**VMAF Segments** indica quanti spezzoni casuali da 30 secondi vengono sondati
-per ogni CRF; default `3`. **CRF Test Steps** indica quanti CRF aggiuntivi
+**VMAF Segments** indica quanti spezzoni casuali vengono sondati per ogni CRF;
+la durata è impostata da **Durata segmento VMAF (s)**, default `30` secondi
+(15 secondi nel Compose di produzione).
+**CRF Test Steps** indica quanti CRF aggiuntivi
 vengono provati a passi di 2; default `3`. **VMAF Target** è il punteggio VMAF
 medio minimo richiesto; default `93`. I tre valori rispettano gli intervalli
 indicati nella tabella.
@@ -331,7 +335,7 @@ Esempio di richiesta API:
 
 Lo stesso esempio dall'interfaccia si ottiene impostando **CRF** a `40`, **CRF
 Test Steps** a `3`, **VMAF Segments** a `3` e **VMAF Target** a `93`. Il backend
-prova quindi CRF `42`, `44` e `46` su tre spezzoni da 30 secondi e usa il CRF più
+prova quindi CRF `42`, `44` e `46` su tre spezzoni della durata configurata e usa il CRF più
 alto che resta sopra `93`.
 
 Il log contiene la selezione dei segmenti, una riga per ogni sonda, il riepilogo
@@ -360,7 +364,7 @@ target, aumentare **CRF Test Steps** per cercare un CRF più alto e risparmiare
 spazio.
 
 Limiti noti: il CRF scelto vale per quel file e per il modello usato; punteggi di
-modelli diversi non sono confrontabili. Su file più corti di 30 secondi si analizza
+modelli diversi non sono confrontabili. Su file più corti della durata configurata si analizza
 il file intero. Se nessun CRF raggiunge il target viene usato il CRF impostato,
 mentre se tutti lo superano bisogna aumentare gli step per cercare valori ancora
 più alti.

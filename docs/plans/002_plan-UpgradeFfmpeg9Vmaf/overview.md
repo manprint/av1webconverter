@@ -63,13 +63,13 @@ GET /api/jobs/{id} →
 | **D14** | `JobFile.vmaf` e `JobFile.vmaf_analysis` sono `Option<...>` con `#[serde(default)]` | i JSON dei job già su disco restano deserializzabili (I-4) |
 | **D15** | SVT-AV1 resta 4.2.0 | nessuna modifica, nessun rischio su `tune=5` |
 | **D16** (user) | Nuova modalità di codifica `vmaf_analysis`, etichetta "Analisi VMAF + Qualità Costante", terza voce di `EncodingMode` | alternativa a `crf` e `target_size`, non combinabile con `target_size`; è una codifica CRF a un passaggio preceduta da una fase di sondaggio |
-| **D17** (user) | Parametri della modalità: `vmaf_segments` (default 3), `crf_test_steps` (default 3), `vmaf_target` (default 93.0); il `crf` impostato dall'utente è il punto di partenza | tre campi nuovi, visibili nell'interfaccia solo con la modalità attiva |
-| **D18** (user) | Durata dei segmenti fissa a 30 secondi, costante di codice non configurabile | un parametro in meno da validare e documentare; il numero di segmenti resta la leva |
+| **D17** (user) | Parametri della modalità: `vmaf_segments` (default 3), `crf_test_steps` (default 3), `vmaf_target` (default 93.0); il `crf` impostato dall'utente è il punto di partenza | campi analisi, inclusa durata segmento, visibili nell'interfaccia solo con la modalità attiva |
+| **D18** (superseded by T-A001) | Durata segmento configurabile tramite `vmaf_segment_duration_seconds`, default applicativo 30 s, env `AV1WC_VMAF_SEGMENT_DURATION_SECONDS`; Compose default 15 s | API/config/UI espongono durata in secondi, validata `1..=300`; segmentazione usa valore job |
 | **D19** (user, matrice) | Ogni CRF viene provato su **tutti** i segmenti e il punteggio del CRF è la media dei segmenti | `vmaf_segments × crf_test_steps` sonde per file (con 3 e 3: 9 codifiche brevi più 9 misure); un segmento atipico non decide da solo |
 | **D20** (user) | CRF provati: `crf+2`, `crf+4`, …, `crf+2·crf_test_steps`; il CRF impostato non viene provato | con CRF 40 e 3 step si provano 42, 44, 46; gli step che superano 63 (massimo di SVT-AV1) vengono scartati con una riga di log |
 | **D21** (user, criterio) | Si sceglie il **CRF più alto** con VMAF medio `>= vmaf_target`. Se nessuno rispetta la soglia si usa il CRF impostato dall'utente; se la rispettano tutti si usa il più alto provato e il log invita ad aumentare gli step | scelta deterministica e spiegabile, sempre tracciata nel log con il motivo |
 | **D22** (user, preset) | Le sonde usano gli stessi `preset`, `svtav1_params`, `pixel_format` e `scale_height` della codifica finale, senza audio | il CRF trovato è direttamente trasferibile; a preset molto bassi l'analisi è costosa, e va documentato |
-| **D23** (user, segmenti) | Segmenti casuali, non sovrapposti, esclusi il primo e l'ultimo 5% della durata; se la durata non regge il numero richiesto il numero viene ridotto con riga di log; sotto i 30 s si analizza il file intero come segmento unico | evita sigle, nero e titoli di coda; nessun sondaggio fuori dalla durata |
+| **D23** (user, segmenti) | Segmenti casuali, non sovrapposti, esclusi il primo e l'ultimo 5% della durata; durata configurabile; se la durata non regge il numero richiesto il numero viene ridotto; sotto la durata configurata si analizza il file intero | evita sigle, nero e titoli di coda; nessun sondaggio fuori dalla durata |
 | **D24** | La casualità dei segmenti deriva dai byte dell'UUID del file, non da una nuova dipendenza | `uuid` v4 è già in uso e i suoi byte sono casuali: nessun crate aggiuntivo, e ripetere l'analisi dello stesso file dà gli stessi segmenti (utile a spiegare un risultato) |
 | **D25** | Avanzamento in modalità analisi: `total_passes = sonde·2 + passaggi della codifica finale` (una sonda conta come una codifica più una misura) | il frontend mostra `passaggio X/Y` senza modifiche; le righe di log rendono leggibile a che punto è l'analisi |
 | **D26** | L'esito dell'analisi è persistito in `JobFile.vmaf_analysis` con la tabella completa dei CRF provati | l'interfaccia e i log possono mostrare *perché* è stato scelto quel CRF, e l'analisi non va rifatta per capirlo |
@@ -78,7 +78,7 @@ GET /api/jobs/{id} →
 | **D29** (user) | Esecutore unico: `agent:gpt5.6-luna` per ogni fase e sotto-fase | non esiste un secondo agente che revisiona: i punti che prevedevano una revisione esterna diventano autorevisioni esplicite, elencate nella tabella finale e nel campo **Assignment** delle sotto-fase interessate |
 | **D30** (runtime, 2026-08-18) | Abilitare `enable_float=true` nella build libvmaf | I modelli VMAF v1 usano feature floating-point; senza questa opzione T-IMG3 fallisce con `Speed_chroma_feature_speed_chroma_uv_score` non inizializzabile |
 | **D31** (runtime, 2026-08-18) | T-AN10 usa 3 segmenti e 3 CRF (`42,44,46`) | il test e2e esercita scenario B completo; T-AN11 e T-AN12 coprono separatamente file corto e fallback |
-| **D32** (runtime, 2026-08-18) | Acceptance T-AN10/T-AN12 usa clip da 120 s invece di 90 s | con D23 (esclusione testa/coda 5% e segmenti non sovrapposti) 90 s offre solo 81 s utili e non può contenere 3 segmenti da 30 s |
+| **D32** (runtime, 2026-08-18) | Acceptance T-AN10/T-AN12 usa clip da 120 s invece di 90 s | con D23 (esclusione testa/coda 5% e segmenti non sovrapposti) 90 s offre solo 81 s utili e non può contenere 3 segmenti da 30 s; durata resta configurabile |
 
 ## Open questions
 
@@ -108,7 +108,8 @@ il CRF scelto al normale percorso di codifica CRF.
 | config `[encoding]` / params job | `vmaf_segments` | `u32`, 1–10 | `3` | interfaccia: "VMAF Segments"; solo in modalità `vmaf_analysis` |
 | config `[encoding]` / params job | `crf_test_steps` | `u32`, 1–10 | `3` | interfaccia: "CRF Test Steps"; solo in modalità `vmaf_analysis` |
 | config `[encoding]` / params job | `vmaf_target` | `f64`, 0–100 | `93.0` | interfaccia: "VMAF Target"; soglia minima di qualità media |
-| env | `AV1WC_MEASURE_VMAF`, `AV1WC_VMAF_MODEL`, `AV1WC_VMAF_SEGMENTS`, `AV1WC_CRF_TEST_STEPS`, `AV1WC_VMAF_TARGET` | come i rispettivi campi | — | override dei valori di config |
+| config `[encoding]` / params job | `vmaf_segment_duration_seconds` | `f64`, 1–300 | `30.0` | interfaccia: "Durata segmento VMAF (s)"; solo in modalità `vmaf_analysis` |
+| env | `AV1WC_MEASURE_VMAF`, `AV1WC_VMAF_MODEL`, `AV1WC_VMAF_SEGMENTS`, `AV1WC_CRF_TEST_STEPS`, `AV1WC_VMAF_TARGET`, `AV1WC_VMAF_SEGMENT_DURATION_SECONDS` | come i rispettivi campi | — | override config; Compose durata default 15 |
 | API `GET /api/jobs`, `GET /api/jobs/{id}` | `files[].vmaf` | `object|null` | `null` | `{ score, min, harmonic_mean, model, duration_seconds, error }` |
 | API `GET /api/jobs`, `GET /api/jobs/{id}` | `files[].vmaf_analysis` | `object|null` | `null` | `{ crf_scelto, crf_di_partenza, target, modello, motivo, segmenti[], risultati[], duration_seconds, error }` |
 | immagine ffmpeg | tag | `9.0.1-svt4.2.0-vmaf3.2.0` | — | sostituisce `8.1.2-svt4.2.0-vmaf3.1.0` |
@@ -120,7 +121,7 @@ il CRF scelto al normale percorso di codifica CRF.
 | `JobFile.vmaf` | `Option<VmafMeasurement>`; `{ score: Option<f64>, min: Option<f64>, harmonic_mean: Option<f64>, model: String, duration_seconds: f64, error: Option<String> }` | `#[serde(default)]`: i job già su disco si caricano con `vmaf: None` (T-VMAF4) |
 | `JobFile.vmaf_analysis` | `Option<VmafAnalysis>`; `{ crf_scelto: u8, crf_di_partenza: u8, target: f64, modello: String, motivo: MotivoScelta, segmenti: Vec<SegmentoAnalisi>, risultati: Vec<RisultatoCrf>, duration_seconds: f64, error: Option<String> }` con `SegmentoAnalisi { indice: u32, inizio_secondi: f64, durata_secondi: f64 }`, `RisultatoCrf { crf: u8, vmaf_medio: Option<f64>, bitrate_medio_bps: Option<u64>, vmaf_per_segmento: Vec<Option<f64>> }`, `MotivoScelta` serializzato snake_case (`sopra_soglia`, `tutti_sopra_soglia`, `nessuno_sopra_soglia`, `analisi_non_eseguibile`) | `#[serde(default)]`: assente sui job precedenti e su quelli non in modalità analisi (T-AN8) |
 | `EncodingMode` acquisisce la variante `VmafAnalysis` (`vmaf_analysis`) | enum serializzato snake_case | variante aggiuntiva: i job salvati con `crf`/`target_size` restano validi. Ogni `match` su `EncodingMode` va aggiornato: `src/config.rs:139` (`effective_svtav1_params`, D28), `src/ffmpeg/encode.rs:218` (`total_passes`), `src/worker.rs:245` (scelta degli argomenti) |
-| `EncodingParams` + cinque campi | `measure_vmaf`, `vmaf_model`, `vmaf_segments`, `crf_test_steps`, `vmaf_target` | le struct di config hanno `serde(default)`: TOML e JSON parziali restano validi; `deny_unknown_fields` impone di aggiornare `config.example.toml` |
+| `EncodingParams` + sei campi | `measure_vmaf`, `vmaf_model`, `vmaf_segments`, `crf_test_steps`, `vmaf_target`, `vmaf_segment_duration_seconds` | le struct di config hanno `serde(default)`: TOML e JSON parziali restano validi; `deny_unknown_fields` impone di aggiornare `config.example.toml` |
 | `Progress.total_passes` può valere `sonde·2 + passaggi finali` | forma invariata (`u8`) | il frontend mostra già `passaggio X/Y` (`src/web/app.js:353`). Con 10 segmenti e 10 step il conto arriva a 201: il campo resta `u8` ma va saturato a 255 in modo esplicito |
 | tag dell'immagine ffmpeg | `9.0.1-svt4.2.0-vmaf3.2.0` | il vecchio tag resta pubblicato; `FFMPEG_IMAGE` è un `ARG` |
 
@@ -163,7 +164,7 @@ il CRF scelto al normale percorso di codifica CRF.
 | # | What it settled | Source | Version / date |
 |---|-----------------|--------|----------------|
 | R1 | FFmpeg 9.0.1 è l'ultima release; tarball `ffmpeg-9.0.1.tar.xz`, sha256 `cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635` | https://ffmpeg.org/releases/ | 9.0.1 |
-| R2 | Rimozioni della 9.0: `-psnr`, `-map_channel`, filtri NPP, preset NVENC legacy e SDK < 11.1, decoder CELT, vecchio handler HLS, codec v308/v408/v410, bump major delle `libav*`; verifica TLS attiva per default | https://github.com/FFmpeg/FFmpeg/blob/release/9.0/Changelog, https://9to5linux.com/ffmpeg-9-0-lei-open-source-multimedia-framework-officially-released | 9.0 "Lei" |
+| R2 | Rimozioni della 9.0: `-psnr`, `-map_channel`, filtri NPP, preset NVENC legacy e SDK < 11.1, decoder CELT, vecchio handler HLS, codec v308/v408/v410, bump major delle `libav*`; verifica TLS attiva per default | https://raw.githubusercontent.com/FFmpeg/FFmpeg/release/9.0/Changelog | 9.0 "Lei" |
 | R3 | Requisiti minimi in FFmpeg 9.0.1: `dav1d >= 1.0.0` (configure:7334), `SvtAv1Enc >= 0.9.0` (configure:7443), `libvmaf >= 2.0.0` (configure:7458) | tarball 9.0.1, `configure` | 9.0.1 |
 | R4 | `-progress` (fftools/ffmpeg_opt.c:1650) e `-stats_period` (:1779) esistono ancora; chiavi emesse invariate: `frame`, `total_size`, `bitrate`, `out_time_us`, `out_time_ms`, `speed`, `progress` (fftools/ffmpeg.c:671-679) | tarball 9.0.1 | 9.0.1 |
 | R5 | `reset_sar` del filtro `scale` è ancora presente | tarball 9.0.1, `libavfilter/vf_scale.c` | 9.0.1 |
@@ -215,7 +216,7 @@ il CRF scelto al normale percorso di codifica CRF.
 | opus statico non trovato da `configure` | `PKG_CONFIG_PATH` già impostato; T-IMG1 verifica l'encoder `libopus` |
 | Rimuovere `libopus0` rompe il runtime | T-IMG1 verifica con `ldd` prima che la fase 2 tocchi il Dockerfile applicativo |
 | Il modello telefono non è caricabile nella build | T-IMG3 lo prova nella fase 1, prima che diventi il default in fase 4 |
-| L'analisi costa troppo tempo su preset bassi | sonde limitate a 30 s, numero di sonde deciso dall'utente, tempo totale registrato in `vmaf_analysis.duration_seconds`, costo documentato nel README con un esempio numerico |
+| L'analisi costa troppo tempo su preset bassi | sonde limitate alla durata configurata, numero di sonde deciso dall'utente, tempo totale registrato in `vmaf_analysis.duration_seconds`, costo documentato nel README |
 | Il file è più corto della finestra di analisi | D23: numero di segmenti ridotto, o segmento unico pari al file; T-AN11 lo prova su un clip di 10 s |
 | Tutti i CRF provati superano la soglia, quindi la scelta è al limite della griglia | D21: si prende il più alto e il log invita ad aumentare gli step; il motivo è persistito in `vmaf_analysis.motivo` |
 | Il CRF scelto su spezzoni non rappresenta il file intero | D19 media su più segmenti, D23 esclude sigle e coda; la tabella per segmento resta visibile per capire la varianza |

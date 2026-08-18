@@ -41,8 +41,9 @@ nessun emoji; nessuna nuova cartella (test in `tests/`, asset in `src/web/`).
   2. Aggiornare `docs/api.md`:
      - valore `vmaf_analysis` fra quelli ammessi per `mode`, con una riga su
        cosa comporta (analisi preliminare, poi codifica CRF a un passaggio);
-     - i tre parametri `vmaf_segments` (1–10, default 3), `crf_test_steps`
-       (1–10, default 3), `vmaf_target` (0–100, default 93), con la nota che
+      - i quattro parametri `vmaf_segments` (1–10, default 3), `crf_test_steps`
+        (1–10, default 3), `vmaf_target` (0–100, default 93) e
+        `vmaf_segment_duration_seconds` (1–300, default 30), con la nota che
        fuori intervallo la creazione del job risponde `400`;
      - il campo `vmaf_analysis` nella rappresentazione del file: `null` se il
        file non è stato convertito in quella modalità, altrimenti
@@ -56,8 +57,8 @@ nessun emoji; nessuna nuova cartella (test in `tests/`, asset in `src/web/`).
      Mantenere lo stile del documento.
   3. **T-AN9** in `tests/api.rs`:
      `i_default_espongono_i_parametri_di_analisi` — `GET /api/defaults`
-     restituisce `params.vmaf_segments == 3`, `params.crf_test_steps == 3`,
-     `params.vmaf_target == 93.0`;
+      restituisce `params.vmaf_segments == 3`, `params.crf_test_steps == 3`,
+      `params.vmaf_target == 93.0` e `params.vmaf_segment_duration_seconds == 30.0`;
      `un_job_in_modalita_analisi_viene_accettato` — `POST /api/jobs` con
      `params.mode = "vmaf_analysis"` risponde `2xx` e la lettura del job
      restituisce la stessa modalità;
@@ -114,17 +115,18 @@ nessun emoji; nessuna nuova cartella (test in `tests/`, asset in `src/web/`).
        dirlo);
      - `svtav1_params`: da `mode: "crf"` a `modes: ["crf", "vmaf_analysis"]`;
      - `target_size_mb` e `size_margin_percent` restano solo `target_size`.
-  4. Aggiungere i tre campi nuovi, visibili solo in analisi
+   4. Aggiungere i quattro campi nuovi, visibili solo in analisi
      (`modes: ["vmaf_analysis"]`), in `PARAM_FIELDS` subito dopo `crf`:
      ```javascript
      { key: "vmaf_segments", label: "VMAF Segments", type: "number", min: 1, max: 10, modes: ["vmaf_analysis"] },
      { key: "crf_test_steps", label: "CRF Test Steps", type: "number", min: 1, max: 10, modes: ["vmaf_analysis"] },
-     { key: "vmaf_target", label: "VMAF Target", type: "number", min: 0, max: 100, step: 0.5, modes: ["vmaf_analysis"] },
+      { key: "vmaf_target", label: "VMAF Target", type: "number", min: 0, max: 100, step: 0.5, modes: ["vmaf_analysis"] },
+      { key: "vmaf_segment_duration_seconds", label: "Durata segmento VMAF (s)", type: "number", min: 1, max: 300, step: 0.5, modes: ["vmaf_analysis"] },
      ```
      e i corrispondenti campi statici in `src/web/index.html`, dentro contenitori
      con `data-mode="vmaf_analysis"`, con `name` uguale alla chiave
-     (`vmaf_segments`, `crf_test_steps`, `vmaf_target`) e un testo di aiuto che
-     spieghi in una riga: quanti spezzoni da 30 secondi vengono sondati, quanti
+      (`vmaf_segments`, `crf_test_steps`, `vmaf_target`, `vmaf_segment_duration_seconds`) e un testo di aiuto che
+      spieghi in una riga: quanti spezzoni della durata configurata vengono sondati, quanti
      CRF si provano a passi di +2 partendo dal CRF impostato, e che il target è
      la qualità media minima da garantire.
   5. Mostrare l'esito nella riga del file, accanto al punteggio VMAF introdotto
@@ -224,7 +226,7 @@ nessun emoji; nessuna nuova cartella (test in `tests/`, asset in `src/web/`).
     (`VMAF Segments`, `CRF Test Steps`, `VMAF Target`), con il significato di
     ognuno e i default;
   - un esempio concreto e leggibile: CRF impostato 40, 3 step, 3 segmenti,
-    target 93 significa provare 42, 44 e 46 su tre spezzoni da 30 secondi e
+    target 93 significa provare 42, 44 e 46 su tre spezzoni della durata configurata e
     usare il CRF più alto che resta sopra 93;
   - dove si legge l'esito: la riga del file mostra il CRF scelto e il target, il
     dettaglio per CRF è nel tooltip, il riepilogo completo nei log di

@@ -28,7 +28,7 @@ dall'UUID del file, D24).
 Contesto necessario a chi esegue, senza aprire altri file: la modalità parte dal
 `crf` impostato dall'utente (per esempio 40), prova `crf+2`, `crf+4`, … per
 `crf_test_steps` valori (con 3 step: 42, 44, 46), su `vmaf_segments` spezzoni
-casuali da 30 secondi (con 3: tre spezzoni), quindi `segmenti × step` sonde per
+casuali dalla durata configurata (default 30 secondi; Compose 15; con 3: tre spezzoni), quindi `segmenti × step` sonde per
 file. Il punteggio di un CRF è la media dei suoi segmenti. Viene scelto il CRF
 più alto con media `>= vmaf_target` (default 93); se nessuno la raggiunge si usa
 il CRF dell'utente; se la raggiungono tutti si usa il più alto provato. Il
@@ -58,20 +58,24 @@ modello di misura di default è `vmaf_v1.0.16_5d0h`, cioè il modello telefono.
      ```
      L'enum ha già `#[serde(rename_all = "snake_case")]`, quindi il valore sul
      filo è `vmaf_analysis`.
-  2. Aggiungere a `EncodingParams` tre campi:
+   2. Aggiungere a `EncodingParams` quattro campi:
      ```rust
      /// Quanti spezzoni del sorgente vengono sondati in modalità di analisi.
      pub vmaf_segments: u32,
      /// Quanti CRF provare oltre a quello impostato, a passi di +2.
      pub crf_test_steps: u32,
      /// Qualità media minima che il CRF scelto deve garantire.
-     pub vmaf_target: f64,
+      pub vmaf_target: f64,
+      /// Durata di ogni spezzone sondato, in secondi.
+      pub vmaf_segment_duration_seconds: f64,
      ```
-  3. Default: `vmaf_segments: 3`, `crf_test_steps: 3`, `vmaf_target: 93.0`.
+  3. Default: `vmaf_segments: 3`, `crf_test_steps: 3`, `vmaf_target: 93.0`,
+     `vmaf_segment_duration_seconds: 30.0`; Compose imposta 15.0 via env.
   4. In `validate` aggiungere, con messaggi in italiano nello stile degli altri:
-     - `vmaf_segments` in `1..=10`, altrimenti errore;
-     - `crf_test_steps` in `1..=10`, altrimenti errore;
-     - `vmaf_target` in `0.0..=100.0`, altrimenti errore.
+      - `vmaf_segments` in `1..=10`, altrimenti errore;
+      - `crf_test_steps` in `1..=10`, altrimenti errore;
+      - `vmaf_target` in `0.0..=100.0`, altrimenti errore.
+      - `vmaf_segment_duration_seconds` in `1..=300`, altrimenti errore.
      Non validare `crf + 2 * crf_test_steps <= 63`: gli step fuori scala
      vengono scartati a runtime con una riga di log (§ 6.2), perché rifiutare il
      job costringerebbe l'utente a calcolare a mano il limite.
@@ -83,11 +87,12 @@ modello di misura di default è `vmaf_v1.0.16_5d0h`, cioè il modello telefono.
   6. `total_passes` (`src/ffmpeg/encode.rs:218`): `VmafAnalysis` restituisce `1`,
      come `Crf`: i passaggi delle sonde non sono passaggi di codifica del file e
      vengono contati a parte (§ 6.4).
-  7. Override da ambiente accanto agli altri: `AV1WC_VMAF_SEGMENTS` e
-     `AV1WC_CRF_TEST_STEPS` con `parse::<u32>()`, `AV1WC_VMAF_TARGET` con
-     `parse::<f64>()`, ognuno ignorato se non interpretabile, come già fa
+      7. Override da ambiente accanto agli altri: `AV1WC_VMAF_SEGMENTS`,
+      `AV1WC_CRF_TEST_STEPS` con `parse::<u32>()`, `AV1WC_VMAF_TARGET` con
+      `parse::<f64>()`, `AV1WC_VMAF_SEGMENT_DURATION_SECONDS` con `parse::<f64>()`,
+      ognuno ignorato se non interpretabile, come già fa
      `AV1WC_PROGRESS_INTERVAL` (`src/config.rs:452`).
-  8. Aggiungere le tre chiavi a `config.example.toml` nella sezione
+      8. Aggiungere le quattro chiavi a `config.example.toml` nella sezione
      `[encoding]`, con commento in italiano, e citare la nuova modalità nel
      commento della chiave `mode`.
 - **Unit tests:** in `src/config.rs`:
@@ -121,9 +126,7 @@ modello di misura di default è `vmaf_v1.0.16_5d0h`, cioè il modello telefono.
      ```rust
      /// Durata fissa di ogni spezzone sondato. Non configurabile: la leva
      /// offerta all'utente è il numero di segmenti.
-     pub const DURATA_SEGMENTO_SECONDI: f64 = 30.0;
-
-     #[derive(Debug, Clone, Copy, PartialEq)]
+      #[derive(Debug, Clone, Copy, PartialEq)]
      pub struct SegmentoAnalisi {
          pub indice: u32,
          pub inizio_secondi: f64,
@@ -136,28 +139,29 @@ modello di misura di default è `vmaf_v1.0.16_5d0h`, cioè il modello telefono.
      /// 5% della durata esclusi perché lì stanno sigle, nero e titoli di coda.
      /// L'entropia arriva dai byte dell'UUID del file, così non serve una
      /// dipendenza per il caso e la stessa analisi è ripetibile.
-     pub fn segmenti_da_analizzare(
-         durata_secondi: f64,
-         richiesti: u32,
-         entropia: &[u8; 16],
-     ) -> Vec<SegmentoAnalisi>
+      pub fn segmenti_da_analizzare(
+          durata_secondi: f64,
+          richiesti: u32,
+          entropia: &[u8; 16],
+          durata_segmento: f64,
+      ) -> Vec<SegmentoAnalisi>
      ```
      Algoritmo, da implementare esattamente così:
-     - se `durata_secondi <= DURATA_SEGMENTO_SECONDI`, restituire un solo
+      - se `durata_secondi <= durata_segmento`, restituire un solo
        segmento `{ indice: 0, inizio_secondi: 0.0, durata_secondi: durata_secondi }`
        (file corto: si analizza tutto);
      - `inizio_utile = durata * 0.05`, `fine_utile = durata * 0.95`,
        `finestra = fine_utile - inizio_utile`;
-     - se `finestra < DURATA_SEGMENTO_SECONDI`, restituire un solo segmento che
-       parte da `inizio_utile` e dura `min(DURATA_SEGMENTO_SECONDI, durata - inizio_utile)`;
-     - `massimo = (finestra / DURATA_SEGMENTO_SECONDI).floor() as u32`;
+      - se `finestra < durata_segmento`, restituire un solo segmento che parte
+        da `inizio_utile` e dura `min(durata_segmento, durata - inizio_utile)`;
+      - `massimo = (finestra / durata_segmento).floor() as u32`;
        `n = richiesti.min(massimo).max(1)`;
      - dividere `finestra` in `n` blocchi uguali di ampiezza `blocco`; per il
-       blocco `i` calcolare `margine = (blocco - DURATA_SEGMENTO_SECONDI).max(0.0)`
+        blocco `i` calcolare `margine = (blocco - durata_segmento).max(0.0)`
        e `offset = margine * (entropia[i % 16] as f64 / 255.0)`; l'inizio è
        `inizio_utile + i as f64 * blocco + offset`. Un blocco per segmento
        garantisce che non si sovrappongano;
-     - la durata di ogni segmento è `DURATA_SEGMENTO_SECONDI`, troncata se
+      - la durata di ogni segmento è `durata_segmento`, troncata se
        superasse `fine_utile`.
   3. Aggiungere la griglia dei CRF:
      ```rust
@@ -359,7 +363,7 @@ modello di misura di default è `vmaf_v1.0.16_5d0h`, cioè il modello telefono.
 - **Change:**
   1. Import: `build_probe_args`, `crf_da_testare`, `righe_riepilogo`,
      `scegli_crf`, `segmenti_da_analizzare`, `SondaRequest`,
-     `DURATA_SEGMENTO_SECONDI` da `crate::ffmpeg::vmaf`; `MotivoScelta`,
+      `MotivoScelta`,
      `RisultatoCrf`, `SegmentoAnalisiPersistito`, `VmafAnalysis` da
      `crate::models`.
   2. Temporanei: aggiungere al vettore passato a `TempFiles::new`
@@ -487,11 +491,12 @@ modello di misura di default è `vmaf_v1.0.16_5d0h`, cioè il modello telefono.
 - **Change:** documentare la modalità come comportamento del backend, ossia ciò
   che questa fase rende usabile via API (l'interfaccia web arriva in fase 7):
   - cosa fa la modalità "Analisi VMAF + Qualità Costante": parte dal CRF
-    impostato, prova CRF crescenti di 2 in 2 su spezzoni casuali da 30 secondi,
+     impostato, prova CRF crescenti di 2 in 2 su spezzoni casuali della durata configurata,
     e usa per la conversione il CRF più alto che mantiene il VMAF medio sopra il
     target;
-  - i tre parametri con i default (`vmaf_segments` 3, `crf_test_steps` 3,
-    `vmaf_target` 93) e l'intervallo ammesso, più le variabili d'ambiente
+   - i quattro parametri con i default (`vmaf_segments` 3, `crf_test_steps` 3,
+     `vmaf_target` 93, `vmaf_segment_duration_seconds` 30) e l'intervallo ammesso,
+     più le variabili d'ambiente
     corrispondenti;
   - un esempio realistico di chiamata API con la modalità attiva e le righe di
     log che ci si deve aspettare, con i numeri raccolti in § 6.5;
@@ -500,7 +505,7 @@ modello di misura di default è `vmaf_v1.0.16_5d0h`, cioè il modello telefono.
     lasciare valori bassi con preset lenti;
   - limiti noti: il CRF scelto vale per quel file; se tutti i CRF provati
     superano il target conviene aumentare gli step; se nessuno lo raggiunge
-    viene usato il CRF impostato; su file più corti di 30 secondi si analizza il
+     viene usato il CRF impostato; su file più corti della durata configurata si analizza il
     file intero; il punteggio dipende dal modello scelto e i valori di modelli
     diversi non sono confrontabili.
   Preservare struttura, tono e lingua; modificare, non riscrivere. Nessun nome
@@ -521,12 +526,12 @@ modello di misura di default è `vmaf_v1.0.16_5d0h`, cioè il modello telefono.
   `PATH="$PWD/target/ffmpeg9/bin:$PATH" cargo test --test e2e_conversion`
 - **Regression guard:** T-E2E-ALL e T-VMAF1 restano verdi; I-7 (nessuna sonda
   fuori dalla nuova modalità); I-4 (job senza `vmaf_analysis` leggibili).
-- **README:** aggiornato con la modalità, i tre parametri, il costo e i limiti.
+   - **README:** aggiornato con la modalità, i quattro parametri, il costo e i limiti.
 
 ## Phase done criterion
 
 Con `mode` diverso da `vmaf_analysis` il comportamento è identico a prima. Con
-`mode = vmaf_analysis` il worker esegue `segmenti × step` sonde da 30 secondi,
+`mode = vmaf_analysis` il worker esegue `segmenti × step` sonde della durata configurata,
 sceglie il CRF più alto con VMAF medio sopra il target (ripiegando sul CRF
 impostato quando nessuno lo raggiunge), scrive il riepilogo e la riga del CRF
 scelto nel log del file, persiste tutto in `JobFile.vmaf_analysis` e codifica il

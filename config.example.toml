@@ -92,9 +92,10 @@ measure_vmaf = false          # AV1WC_MEASURE_VMAF
 # Modello VMAF built-in usato per la misura.
 vmaf_model = "vmaf_v1.0.16_5d0h"  # AV1WC_VMAF_MODEL
 
-# Solo in modalità vmaf_analysis: numero di spezzoni casuali da 30 secondi.
+# Solo in modalità vmaf_analysis: numero di spezzoni casuali.
 vmaf_segments = 3                  # AV1WC_VMAF_SEGMENTS — da 1 a 10
 # Solo in modalità vmaf_analysis: CRF aggiuntivi provati a passi di 2.
 crf_test_steps = 3                 # AV1WC_CRF_TEST_STEPS — da 1 a 10
 # Solo in modalità vmaf_analysis: VMAF medio minimo richiesto.
 vmaf_target = 93.0                 # AV1WC_VMAF_TARGET — da 0 a 100
+vmaf_segment_duration_seconds = 30.0 # AV1WC_VMAF_SEGMENT_DURATION_SECONDS — da 1 a 300

@@ -1,7 +1,7 @@
 # Aggiornamento toolchain FFmpeg 9, misura VMAF e modalità di analisi — Resume
 
 > **Next:** fase 7 completata; nessuna modifica oltre fase 7 senza richiesta esplicita
-> **Last updated:** 2026-08-18T13:25:00Z
+> **Last updated:** 2026-08-18T14:20:00Z
 > Solo quadro di stato. Lo stato di esecuzione completo vive in
 > [STATE.md](STATE.md); in caso di disaccordo vince STATE.md. Aggiornare
 > entrambi dopo ogni sotto-fase.
@@ -50,6 +50,7 @@ Status values: `TODO` · `IN_PROGRESS` · `DONE` · `SKIPPED` · `BLOCKED`
 | T-AN10 | e2e | `DONE` | 120 s, CRF 42/44/46 su 3 segmenti, criterio ricalcolato, log con il CRF scelto, output AV1 |
 | T-AN11 | e2e | `DONE` | clip di 10 s: segmento unico pari al file, conversione completata |
 | T-AN12 | e2e | `DONE` | target inarrivabile: `nessuno_sopra_soglia`, CRF impostato e log dichiarati |
+| T-A001 | unit/API | `DONE` | default 30 s, durata 15 s accettata via API, valori fuori 1..=300 rifiutati |
 
 ## Docs
 
@@ -84,3 +85,6 @@ Status values: `TODO` · `IN_PROGRESS` · `DONE` · `SKIPPED` · `BLOCKED`
 - V001-F03: `FIXED` — default script ripristinato come phase 2.2.
 - V001-F04: `ACCEPTED` — `.serena/` resta non tracciata su richiesta utente.
 - V001-F05: `FIXED` — conteggio unit 117.
+- B-A001: `FIXED` — fonte Lychee 403 rimossa da R2; changelog ufficiale mantenuto.
+- T-A001: `DONE` — durata segmenti configurabile; default applicativo 30 s,
+  Compose 15 s; unit 118, API 25, e2e 14.

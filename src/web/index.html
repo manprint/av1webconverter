@@ -62,7 +62,7 @@
               <div class="field hidden" data-mode="vmaf_analysis">
                 <label for="param-vmaf-segments">VMAF Segments</label>
                 <input id="param-vmaf-segments" name="vmaf_segments" type="number" min="1" max="10" />
-                <small>Numero di spezzoni da 30 secondi sondati per ogni CRF.</small>
+                <small>Numero di spezzoni della durata configurata sondati per ogni CRF.</small>
               </div>
               <div class="field hidden" data-mode="vmaf_analysis">
                 <label for="param-crf-test-steps">CRF Test Steps</label>
@@ -73,6 +73,11 @@
                 <label for="param-vmaf-target">VMAF Target</label>
                 <input id="param-vmaf-target" name="vmaf_target" type="number" min="0" max="100" step="0.5" />
                 <small>Qualità VMAF media minima da garantire.</small>
+              </div>
+              <div class="field hidden" data-mode="vmaf_analysis">
+                <label for="param-vmaf-segment-duration">Durata segmento VMAF (s)</label>
+                <input id="param-vmaf-segment-duration" name="vmaf_segment_duration_seconds" type="number" min="1" max="300" step="0.5" />
+                <small>Durata di ogni spezzone sondato; default 30 secondi.</small>
               </div>
               <div class="field hidden" data-mode="target_size">
                 <label for="param-target-size">Dimensione target (MB)</label>

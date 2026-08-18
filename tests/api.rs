@@ -133,6 +133,7 @@ async fn i_default_espongono_i_parametri_di_analisi() {
     assert_eq!(body["params"]["vmaf_segments"], 3);
     assert_eq!(body["params"]["crf_test_steps"], 3);
     assert_eq!(body["params"]["vmaf_target"], 93.0);
+    assert_eq!(body["params"]["vmaf_segment_duration_seconds"], 30.0);
 }
 
 #[tokio::test]
@@ -155,12 +156,35 @@ async fn un_job_in_modalita_analisi_viene_accettato() {
 }
 
 #[tokio::test]
+async fn un_job_accetta_durata_segmento_vmaf_personalizzata() {
+    let server = common::start().await;
+    let response = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({
+            "name": "durata personalizzata",
+            "params": {
+                "mode": "vmaf_analysis",
+                "vmaf_segment_duration_seconds": 15.0
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    let job: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(job["params"]["vmaf_segment_duration_seconds"], 15.0);
+}
+
+#[tokio::test]
 async fn i_parametri_di_analisi_fuori_intervallo_sono_rifiutati() {
     let server = common::start().await;
     for params in [
         json!({ "vmaf_segments": 0 }),
         json!({ "crf_test_steps": 11 }),
         json!({ "vmaf_target": 150.0 }),
+        json!({ "vmaf_segment_duration_seconds": 0.5 }),
     ] {
         let response = server
             .client

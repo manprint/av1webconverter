@@ -116,9 +116,10 @@ In modalità `vmaf_analysis` si possono impostare i parametri seguenti:
 
 | Parametro | Default | Intervallo | Effetto |
 | --------- | ------- | ---------- | ------- |
-| `vmaf_segments` | `3` | `1..=10` | spezzoni casuali da 30 secondi sondati per ogni CRF |
+| `vmaf_segments` | `3` | `1..=10` | numero di spezzoni casuali sondati per ogni CRF |
 | `crf_test_steps` | `3` | `1..=10` | CRF aggiuntivi provati a passi di 2 |
 | `vmaf_target` | `93.0` | `0..=100` | VMAF medio minimo richiesto |
+| `vmaf_segment_duration_seconds` | `30.0` | `1..=300` | durata di ogni spezzone sondato, in secondi |
 
 Un valore fuori intervallo per uno dei tre parametri fa rispondere la creazione
 del job con `400`. `progress.total_passes` in questa modalità comprende anche

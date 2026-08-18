@@ -268,6 +268,7 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
             info.duration_seconds,
             params.vmaf_segments,
             file_id.as_bytes(),
+            params.vmaf_segment_duration_seconds,
         )
     } else {
         Vec::new()
