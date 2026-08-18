@@ -1,7 +1,7 @@
 # Aggiornamento toolchain FFmpeg 9, misura VMAF e modalità di analisi — Resume
 
 > **Next:** fase 7 completata; nessuna modifica oltre fase 7 senza richiesta esplicita
-> **Last updated:** 2026-08-18T14:20:00Z
+> **Last updated:** 2026-08-18T14:45:00Z
 > Solo quadro di stato. Lo stato di esecuzione completo vive in
 > [STATE.md](STATE.md); in caso di disaccordo vince STATE.md. Aggiornare
 > entrambi dopo ogni sotto-fase.
@@ -88,3 +88,5 @@ Status values: `TODO` · `IN_PROGRESS` · `DONE` · `SKIPPED` · `BLOCKED`
 - B-A001: `FIXED` — fonte Lychee 403 rimossa da R2; changelog ufficiale mantenuto.
 - T-A001: `DONE` — durata segmenti configurabile; default applicativo 30 s,
   Compose 15 s; unit 118, API 25, e2e 14.
+- B-A002: `FIXED` — Cargo.lock allineato a Cargo.toml; metadata locked e Docker
+  build pass.

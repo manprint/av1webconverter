@@ -25,3 +25,22 @@
 - **Plan impact:** aggiornata fonte R2; nessun cambio di decisioni, codice o
   comportamento applicativo.
 - **Related:** phase 1 § 1.3.
+
+## B-A002 — Cargo.lock non allineato al manifest
+
+- **Date:** 2026-08-18 | **Agent:** `agent:gpt5.6-luna` | **Severity:** blocker
+- **Symptom:** build Docker e job CI falliscono con `--locked` perché Cargo tenta
+  di aggiornare `/src/Cargo.lock`.
+- **Reproduction:** `docker build --build-arg FFMPEG_IMAGE=local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0 -t av1webconverter:lock-repro .` → errore `cannot update the lock file ... --locked`.
+- **Root cause:** package root dichiara versione `1.1.1` in `Cargo.toml:3`, ma
+  `Cargo.lock:93` dichiarava `1.0.2`.
+- **Fix:** aggiornato package root in `Cargo.lock` a `1.1.1`; aggiunto gate CI
+  esplicito `cargo metadata --locked --format-version 1 --no-deps`.
+- **Files:** `Cargo.lock:92-94`, `.github/workflows/test.yml:23-27`.
+- **Regression test:** `cargo metadata --locked --format-version 1 --no-deps` —
+  termina 0; build Docker con `--locked` — completa.
+- **Gates:** `cargo metadata --locked`, full Rust, API, e2e, Docker build, YAML e
+  diff → pass.
+- **README:** not user-visible.
+- **Plan impact:** none; lockfile consistency guard added to CI.
+- **Related:** CI workflow e Dockerfile.

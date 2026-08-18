@@ -3,7 +3,7 @@
 > **LEGGERE QUESTO FILE PER PRIMO all'inizio di ogni sessione, prima di
 > qualunque altro file del piano. AGGIORNARLO dopo ogni sotto-fase e prima di
 > chiudere una sessione.**
-> **Last updated:** 2026-08-18T14:25:00Z | **By:** `agent:gpt5.6-luna` | **Session:** 1
+> **Last updated:** 2026-08-18T14:45:00Z | **By:** `agent:gpt5.6-luna` | **Session:** 1
 
 ## 0. Protocol
 
@@ -153,6 +153,7 @@ di `overview.md`: non devono divergere.
 | 39 | T-A001 | `agent:gpt5.6-luna` | Durata segmenti VMAF configurabile da API/UI/env; Compose default 15 s | `src/config.rs`, `src/ffmpeg/vmaf.rs`, `src/worker.rs`, `src/web/app.js`, `src/web/index.html`, `compose.yaml`, `config.example.toml`, `README.md`, `docs/api.md`, phase docs | unit 118; gate completo da ripetere | uncommitted |
 | 40 | T-A001 verify | `agent:gpt5.6-luna` | Test API durata personalizzata e gate completi passati | `tests/api.rs`, `STATE.md`, `resume.md`, `tasks.md` | unit 118, API 25, e2e 14, fmt/clippy/build/frontend/YAML/Compose/diff: verde | uncommitted |
 | 41 | T-A001 final | `agent:gpt5.6-luna` | Riferimenti phase/docs riallineati al nuovo campo e override env verificato a 15 s | `overview.md`, `phase_06.md`, `phase_07.md`, `README.md`, `docs/api.md`, `config.example.toml`, `STATE.md`, `resume.md` | full gate finale verde | uncommitted |
+| 42 | B-A002 | `agent:gpt5.6-luna` | Riallineato package root Cargo.lock a Cargo.toml e aggiunto guard CI metadata locked | `Cargo.lock`, `.github/workflows/test.yml`, `bugs.md`, `STATE.md`, `resume.md` | metadata locked, Docker locked build, full suite: verde | uncommitted |
 
 ## 5. Files touched
 
@@ -197,6 +198,9 @@ di `overview.md`: non devono divergere.
 | `src/web/app.js`, `src/web/index.html` | campo durata UI | T-A001 |
 | `compose.yaml`, `config.example.toml` | override Compose 15 e default file 30 | T-A001 |
 | `README.md`, `docs/api.md`, phase docs | documentazione configurazione | T-A001 |
+| `Cargo.lock` | package root aggiornato da 1.0.2 a 1.1.1 | B-A002 |
+| `.github/workflows/test.yml` | gate cargo metadata locked | B-A002 |
+| `docs/plans/002_plan-UpgradeFfmpeg9Vmaf/bugs.md` | B-A002 diagnosis/fix ledger | B-A002 |
 | `src/ffmpeg/vmaf.rs` | test log senza media | audit finale |
 | `tests/e2e_conversion.rs` | T-AN10/T-AN12 a 120 s e 3×3 | audit finale |
 | `docs/plans/002_plan-UpgradeFfmpeg9Vmaf/phase_07.md` | acceptance T-AN10 a 120 s e 3×3 | audit finale |
@@ -316,6 +320,12 @@ di `overview.md`: non devono divergere.
 | T-A001 e2e | `PATH="$PWD/target/ffmpeg9/bin:$PATH" cargo test --test e2e_conversion` | `pass: 14` | 2026-08-18 |
 | T-A001 env | `AV1WC_VMAF_SEGMENT_DURATION_SECONDS=15 cargo run -- --print-config` | `pass: 15.0` | 2026-08-18 |
 | T-A001 Compose | `docker compose config` | `pass: override 15` | 2026-08-18 |
+| B-A002 metadata | `cargo metadata --locked --format-version 1 --no-deps` | `pass` | 2026-08-18 |
+| B-A002 Docker | `docker build ... -t av1webconverter:lock-repro .` | `pass: av1webconverter v1.1.1` | 2026-08-18 |
+| B-A002 unit | `cargo test --lib` | `pass: 118` | 2026-08-18 |
+| B-A002 API | `cargo test --test api` | `pass: 25` | 2026-08-18 |
+| B-A002 e2e | `PATH="$PWD/target/ffmpeg9/bin:$PATH" cargo test --test e2e_conversion` | `pass: 14` | 2026-08-18 |
+| B-A002 static | fmt, clippy, build release, frontend, YAML, Compose, diff | `pass` | 2026-08-18 |
 | audit Docker app | `docker build --build-arg FFMPEG_IMAGE=local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0 -t av1webconverter:local .` | `pass` | 2026-08-18, audit finale |
 | audit frontend/YAML/diff | `node --check ...; python3 ...; git diff --check` | `pass` | 2026-08-18, audit finale |
 | audit VMAF parser | `cargo test --lib ffmpeg::vmaf::` | `pass: 21` | 2026-08-18, audit finale |
@@ -358,11 +368,12 @@ none
 | 8 | phase_02 §2.2 diceva di modificare solo il commento dello script | default ripristinato a `fabiop85/ffmpeg-netflix:latest` | correction plan V001 richiedeva coerenza col piano | finding V001-F03 chiuso |
 | 9 | R2 includeva fonte secondaria 9to5Linux | rimossa dopo 403 Lychee; resta URL ufficiale FFmpeg | CI Lychee rifiutava fonte secondaria | B-A001 chiuso |
 | 10 | D18 diceva durata non configurabile | durata resa configurabile su richiesta utente | necessario propagare campo attraverso config/API/UI/worker | T-A001 chiuso |
+| 11 | `Cargo.lock` package root 1.0.2 vs manifest 1.1.1 | lock root aggiornato 1.1.1 e gate metadata aggiunto | `--locked` Docker/CI falliva prima di compilare | B-A002 chiuso |
 
 ## 9. Blockers and open questions
 
 - nessun BLOCKER aperto; `.serena/` resta non tracciata e finding V001-F04 è
-  ACCEPTED su richiesta utente; V001-F01/F02/F03/F05 e B-A001 sono chiusi.
+  ACCEPTED su richiesta utente; V001-F01/F02/F03/F05, B-A001 e B-A002 sono chiusi.
 
 ## 10. Do-not-repeat
 
