@@ -1,6 +1,6 @@
 [package]
 name = "av1webconverter"
-version = "1.1.1"
+version = "1.1.2-pre"
 edition = "2021"
 rust-version = "1.85"
 description = "Convertitore video AV1 con frontend web embedded"
