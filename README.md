@@ -196,6 +196,14 @@ Default rilevanti, ereditati dalle misure documentate in `README.image.md`:
   ingrandiva il file dal 4 al 34%. Con `0` vale il valore fisso `keyint` (240
   frame), usato anche quando il frame rate non è rilevabile. Un `keyint=` dentro
   `svtav1_params` ha la precedenza su entrambi.
+- Le sorgenti HD (almeno 1280 pixel di larghezza o 720 di altezza) che non
+  dichiarano lo spazio colore vengono marcate BT.709. Senza tag i player
+  scelgono la matrice dalla risoluzione dell'output, quindi un HD ridotto a 480p
+  verrebbe mostrato come BT.601, con rossi e verdi spostati. Il tag è applicato
+  con `setparams`, che cambia i metadati senza toccare i pixel. Si aggiungono
+  solo i tag mancanti, e solo se quelli presenti sono già BT.709: le sorgenti SD,
+  BT.601, BT.2020 o HDR restano come sono. La misura VMAF applica gli stessi tag
+  al riferimento, perché tag diversi falserebbero il punteggio.
 - Il ridimensionamento limita l'altezza a `scale_height` mantenendo l'aspetto
   visivo del sorgente e normalizzando a pixel quadrati (SAR 1:1), per evitare DAR
   errati con sorgenti anamorfiche. Con `scale_height = 0` non viene applicato

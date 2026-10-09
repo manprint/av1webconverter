@@ -705,7 +705,7 @@ async fn il_gop_dura_dieci_secondi_al_frame_rate_del_sorgente() {
 
     let server = common::start().await;
     let source = server.temp.path().join("trenta.mp4");
-    common::make_test_video_at(&source, 25, 30);
+    common::make_test_video_at(&source, 25, 30, "640x360");
 
     let job: serde_json::Value = server
         .client
@@ -747,6 +747,71 @@ async fn il_gop_dura_dieci_secondi_al_frame_rate_del_sorgente() {
             "keyframe a {time} s invece di {expected} s: {keyframes:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn un_sorgente_hd_senza_tag_viene_dichiarato_bt709() {
+    if !common::ffmpeg_with_svtav1() || !common::ffmpeg_with_libvmaf() {
+        eprintln!("ffmpeg con SVT-AV1 e libvmaf non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("hd.mp4");
+    common::make_test_video_at(&source, 2, 10, "1280x720");
+    assert_eq!(
+        common::color_tags(&source),
+        "unknown,unknown,unknown,unknown"
+    );
+
+    let job: serde_json::Value = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({ "name": "hd senza tag", "params": { "measure_vmaf": true } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    let uploaded = upload_file(&server, &job_id, "hd.mp4", &source).await;
+    let file_id = uploaded["job"]["files"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/start")))
+        .send()
+        .await
+        .unwrap();
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "{job}");
+
+    // Ridotto a 120 righe, senza tag verrebbe letto come BT.601.
+    let output_path = server.output_dir.join(&job_id).join("hd_av1.mp4");
+    assert_eq!(common::color_tags(&output_path), "tv,bt709,bt709,bt709");
+    let log = file_log_text(&server, &job_id, &file_id).await;
+    assert!(log.contains("dichiarato BT.709"), "{log}");
+
+    // I tag non devono falsare la misura: con tag diversi fra i due rami
+    // FFmpeg 9 converte un ramo e il VMAF crolla. Il punteggio dell'app deve
+    // coincidere con quello del distorto riportato senza tag.
+    let score = job["files"][0]["vmaf"]["score"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("VMAF assente: {job}"));
+    let (width, height, _, _) = common::video_geometry(&output_path);
+    let expected = common::vmaf_score(
+        &output_path,
+        "setparams=colorspace=unknown:color_primaries=unknown:color_trc=unknown,",
+        &source,
+        &format!("scale=w={width}:h={height}:flags=bicubic:reset_sar=1,"),
+    );
+    assert!(
+        (score - expected).abs() < 0.001,
+        "VMAF {score} diverso da quello senza tag {expected}"
+    );
 }
 
 #[tokio::test]

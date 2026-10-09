@@ -105,4 +105,6 @@ Le opzioni `SCALE_HEIGHT`, `PRESET`, `CRF`, `AUDIO_BITRATE`, `LOCAL_CPUS`,
 nelle varianti documentate sopra. `KEYINT_SECONDS` (default 10) fissa la
 distanza fra keyframe in secondi: lo script la converte in frame dal frame rate
 del sorgente, quindi `-g 600` a 60 fps e `-g 240` a 23.976; con `0` o un frame
-rate non leggibile resta `-g 240`.
+rate non leggibile resta `-g 240`. Come l'applicazione, lo script riduce ogni
+traccia audio a stereo prima di libopus e marca BT.709 le sorgenti HD senza tag
+colore.

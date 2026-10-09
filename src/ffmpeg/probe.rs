@@ -21,6 +21,11 @@ pub struct MediaInfo {
     pub source_audio_bitrate_bps: Option<u64>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    /// Metadati colore del primo stream video, come li nomina ffmpeg (`bt709`,
+    /// `bt2020nc`, …). `None` se il sorgente non li dichiara.
+    pub color_space: Option<String>,
+    pub color_primaries: Option<String>,
+    pub color_transfer: Option<String>,
 }
 
 impl MediaInfo {
@@ -38,7 +43,8 @@ pub async fn probe(ffprobe_bin: &Path, input: &Path) -> Result<MediaInfo> {
             "-show_entries",
             "format=duration",
             "-show_entries",
-            "stream=index,codec_type,codec_name,avg_frame_rate,bit_rate,width,height",
+            "stream=index,codec_type,codec_name,avg_frame_rate,bit_rate,width,height,\
+             color_space,color_primaries,color_transfer",
             "-of",
             "json",
             "-i",
@@ -102,6 +108,16 @@ pub fn parse_probe_json(json: &serde_json::Value) -> Result<MediaInfo> {
         .and_then(|rate| rate.as_str())
         .and_then(parse_frame_rate);
 
+    // Il JSON di ffprobe omette i valori non dichiarati; "unknown" compare con
+    // altri formati di output e vale come assente.
+    let color = |key: &str| {
+        video
+            .and_then(|stream| stream.get(key))
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty() && *value != "unknown")
+            .map(str::to_string)
+    };
+
     let estimated_frames = frame_rate
         .map(|(numerator, denominator)| {
             (duration_seconds * numerator as f64 / denominator as f64).round() as u64
@@ -125,6 +141,9 @@ pub fn parse_probe_json(json: &serde_json::Value) -> Result<MediaInfo> {
             .and_then(|stream| stream.get("height"))
             .and_then(|value| value.as_u64())
             .map(|value| value as u32),
+        color_space: color("color_space"),
+        color_primaries: color("color_primaries"),
+        color_transfer: color("color_transfer"),
     })
 }
 
@@ -168,6 +187,23 @@ mod tests {
         assert_eq!(info.audio_streams, 1);
         assert_eq!(info.source_audio_bitrate_bps, Some(128_000));
         assert_eq!(info.height, Some(1080));
+    }
+
+    #[test]
+    fn probe_json_legge_i_tag_colore() {
+        let json = serde_json::json!({
+            "format": { "duration": "10" },
+            "streams": [{
+                "codec_type": "video",
+                "avg_frame_rate": "25/1",
+                "color_space": "bt709",
+                "color_primaries": "unknown",
+            }]
+        });
+        let info = parse_probe_json(&json).unwrap();
+        assert_eq!(info.color_space.as_deref(), Some("bt709"));
+        assert_eq!(info.color_primaries, None);
+        assert_eq!(info.color_transfer, None);
     }
 
     #[test]

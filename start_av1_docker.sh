@@ -208,6 +208,34 @@ keyint=$(
         }
     '
 )
+# Una sorgente HD senza tag colore viene dichiarata BT.709, come fa
+# l'applicazione: senza tag un output ridotto a 480p verrebbe letto come
+# BT.601. Si aggiungono solo i tag mancanti, e solo se quelli presenti sono già
+# BT.709. setparams cambia i metadati senza toccare i pixel.
+color_tags=$(
+    ffprobe -v error -select_streams v:0 \
+        -show_entries stream=width,height,color_space,color_primaries,color_transfer \
+        -of default=noprint_wrappers=1 -i "$input_path" |
+    awk -F= '
+        { value[$1] = $2 }
+        END {
+            if (value["width"] < 1280 && value["height"] < 720)
+                exit
+            split("color_space color_primaries color_transfer", keys, " ")
+            split("colorspace color_primaries color_trc", options, " ")
+            for (i = 1; i <= 3; i++) {
+                tag = value[keys[i]]
+                if (tag == "" || tag == "unknown")
+                    missing = missing (missing == "" ? "" : ":") options[i] "=bt709"
+                else if (tag != "bt709")
+                    exit
+            }
+            if (missing != "")
+                print "setparams=" missing
+        }
+    '
+)
+video_filter="scale=-2:trunc(min(${scale_height}\\,ih)/2)*2:reset_sar=1${color_tags:+,$color_tags}"
 
 input_dir=$(cd -- "$(dirname -- "$input_path")" && pwd -P)
 input_name=$(basename -- "$input_path")
@@ -250,7 +278,7 @@ remote_ffmpeg=(
     -i pipe:0
     -map 0:v:0 -map '0:a?'
     -c:v libsvtav1
-    -vf "scale=-2:trunc(min(${scale_height}\\,ih)/2)*2:reset_sar=1"
+    -vf "$video_filter"
     -b:v 0 -crf "$crf" -preset "$preset"
     -svtav1-params "$svtav1_params"
     -g "$keyint" -pix_fmt yuv420p10le

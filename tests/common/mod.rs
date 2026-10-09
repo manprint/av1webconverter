@@ -127,18 +127,19 @@ pub fn ffmpeg_with_libvmaf() -> bool {
 
 /// Genera un MP4 di prova con traccia video e audio.
 pub fn make_test_video(path: &Path, seconds: u32) {
-    make_test_video_at(path, seconds, 10);
+    make_test_video_at(path, seconds, 10, "640x360");
 }
 
-/// Come `make_test_video`, con il frame rate indicato.
-pub fn make_test_video_at(path: &Path, seconds: u32, fps: u32) {
+/// Come `make_test_video`, con frame rate e dimensione indicati. Il video
+/// mpeg4 generato non dichiara tag colore.
+pub fn make_test_video_at(path: &Path, seconds: u32, fps: u32, size: &str) {
     let status = std::process::Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error", "-y"])
         .args([
             "-f",
             "lavfi",
             "-i",
-            &format!("testsrc=duration={seconds}:size=640x360:rate={fps}"),
+            &format!("testsrc=duration={seconds}:size={size}:rate={fps}"),
         ])
         .args([
             "-f",
@@ -224,6 +225,54 @@ pub fn audio_streams(path: &Path) -> Vec<String> {
         .map(|line| line.trim().trim_end_matches(',').to_string())
         .filter(|line| !line.is_empty())
         .collect()
+}
+
+/// Tag colore del primo stream video: "range,matrice,primari,trasferimento".
+pub fn color_tags(path: &Path) -> String {
+    let output = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=color_range,color_space,color_primaries,color_transfer",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .expect("ffprobe sui tag colore");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// VMAF medio calcolato direttamente con ffmpeg, con i filtri indicati in
+/// testa a ciascun ramo.
+pub fn vmaf_score(
+    distorted: &Path,
+    distorted_filters: &str,
+    reference: &Path,
+    reference_filters: &str,
+) -> f64 {
+    let log = distorted.with_extension("verifica.json");
+    let graph = format!(
+        "[0:v]settb=AVTB,setpts=PTS-STARTPTS,{distorted_filters}format=yuv420p10le[dist];\
+         [1:v]settb=AVTB,setpts=PTS-STARTPTS,{reference_filters}format=yuv420p10le[ref];\
+         [dist][ref]libvmaf=model=version=vmaf_v1.0.16_5d0h:log_fmt=json:log_path={}",
+        log.display()
+    );
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i"])
+        .arg(distorted)
+        .arg("-i")
+        .arg(reference)
+        .args(["-lavfi", &graph, "-an", "-f", "null", "-"])
+        .status()
+        .expect("misura VMAF di verifica");
+    assert!(status.success(), "misura VMAF di verifica fallita");
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&log).expect("log VMAF di verifica")).unwrap();
+    json["pooled_metrics"]["vmaf"]["mean"].as_f64().unwrap()
 }
 
 /// Istanti dei keyframe del primo stream video, dai flag dei pacchetti: non

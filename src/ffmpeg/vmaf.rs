@@ -137,6 +137,11 @@ pub struct VmafRequest<'a> {
     /// Geometria del distorto, presente solo quando differisce da quella del
     /// sorgente: libvmaf confronta solo immagini della stessa dimensione.
     pub scale_to: Option<(u32, u32)>,
+    /// `setparams` che la codifica ha aggiunto al distorto (vedi
+    /// `color_tag_filter`). Il riferimento riceve gli stessi tag: con tag
+    /// diversi FFmpeg 9 converte uno dei due rami prima di libvmaf e il
+    /// punteggio crolla anche a pixel identici.
+    pub tag_colore: Option<&'a str>,
     pub progress_interval: f64,
 }
 
@@ -149,6 +154,10 @@ pub fn build_vmaf_args(request: &VmafRequest<'_>) -> Vec<OsString> {
         reference_branch.push_str(&format!(
             ",scale=w={width}:h={height}:flags=bicubic:reset_sar=1"
         ));
+    }
+    if let Some(tag_colore) = request.tag_colore {
+        reference_branch.push(',');
+        reference_branch.push_str(tag_colore);
     }
     // Le basi tempi vengono allineate perché MP4 e sorgente possono usare timebase diverse.
     // format porta entrambi i rami a profondità e formato accettati da libvmaf.
@@ -320,6 +329,7 @@ mod tests {
             riferimento_inizio: None,
             riferimento_durata: None,
             scale_to,
+            tag_colore: None,
             progress_interval: 5.0,
         }
     }
@@ -350,6 +360,19 @@ mod tests {
     fn il_riferimento_viene_riscalato_alla_geometria_del_distorto() {
         assert!(filter(&build_vmaf_args(&request(Some((1280, 720)), None)))
             .contains("scale=w=1280:h=720:flags=bicubic:reset_sar=1"));
+    }
+
+    #[test]
+    fn il_riferimento_riceve_gli_stessi_tag_colore_del_distorto() {
+        let tag = "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709";
+        let filter = filter(&build_vmaf_args(&VmafRequest {
+            tag_colore: Some(tag),
+            ..request(Some((854, 480)), None)
+        }));
+        let (distorted, reference) = filter.split_once(';').unwrap();
+        assert!(!distorted.contains("setparams"));
+        // Dopo la scala, come nella catena di codifica.
+        assert!(reference.contains(&format!("reset_sar=1,{tag},format=yuv420p10le[ref]")));
     }
 
     #[test]
@@ -455,6 +478,9 @@ mod tests {
                 source_audio_bitrate_bps: None,
                 width: Some(1920),
                 height: Some(1080),
+                color_space: None,
+                color_primaries: None,
+                color_transfer: None,
             })),
             input: Path::new("source.mp4"),
             output_mkv: Path::new("probe.mkv"),

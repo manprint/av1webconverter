@@ -17,8 +17,8 @@ use crate::config::{EncodingMode, EncodingParams};
 use crate::error::{ApiError, ApiResult};
 use crate::events::Event;
 use crate::ffmpeg::encode::{
-    build_crf_args, build_remux_args, build_two_pass_args, compute_video_bitrate, run_ffmpeg,
-    total_passes, FfmpegEvent, RunOutcome,
+    build_crf_args, build_remux_args, build_two_pass_args, color_tag_filter, compute_video_bitrate,
+    run_ffmpeg, total_passes, FfmpegEvent, RunOutcome,
 };
 use crate::ffmpeg::probe::probe;
 use crate::ffmpeg::progress::{format_clock, format_progress_line, format_size, ProgressParser};
@@ -255,6 +255,15 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
         },
     )
     .await;
+    if let Some(filter) = color_tag_filter(&info) {
+        log_line(
+            state,
+            job_id,
+            file_id,
+            &format!("Sorgente HD senza tag colore: dichiarato BT.709 ({filter})"),
+        )
+        .await;
+    }
 
     let temp_dir = state.temp_dir();
     tokio::fs::create_dir_all(&temp_dir)
@@ -527,6 +536,7 @@ async fn measure_vmaf(
         }
     };
 
+    let tag_colore = color_tag_filter(source_info);
     let scale_to = match (
         output_info.width,
         output_info.height,
@@ -560,6 +570,7 @@ async fn measure_vmaf(
         riferimento_inizio: None,
         riferimento_durata: None,
         scale_to,
+        tag_colore: tag_colore.as_deref(),
         progress_interval: params.progress_interval,
     };
     let args = build_vmaf_args(&request);
@@ -725,6 +736,7 @@ async fn analizza_file(
         .await;
     }
 
+    let tag_colore = color_tag_filter(info);
     let mut risultati = Vec::with_capacity(crf_candidati.len());
     let mut passo = 0u32;
     for &crf in crf_candidati {
@@ -823,6 +835,7 @@ async fn analizza_file(
                 riferimento_inizio: Some(segmento.inizio_secondi),
                 riferimento_durata: Some(segmento.durata_secondi),
                 scale_to,
+                tag_colore: tag_colore.as_deref(),
                 progress_interval: params.progress_interval,
             };
             let vmaf_args = build_vmaf_args(&request);

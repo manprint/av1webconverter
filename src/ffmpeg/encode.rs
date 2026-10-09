@@ -47,6 +47,52 @@ pub fn scale_filter(scale_height: u32) -> Option<String> {
     Some(format!("scale=-2:{height}:reset_sar=1"))
 }
 
+/// Dichiara BT.709 sulle sorgenti HD che non dichiarano lo spazio colore.
+///
+/// Senza tag i player scelgono la matrice dalla risoluzione dell'output:
+/// BT.709 in HD, BT.601 sotto. Un sorgente HD non taggato ridotto a 480p
+/// verrebbe mostrato con la matrice sbagliata, con rossi e verdi spostati.
+/// Per convenzione un HD senza tag è BT.709, quindi si aggiungono solo i tag
+/// mancanti, e solo se quelli presenti sono già BT.709: un sorgente BT.601,
+/// BT.2020 o HDR resta com'è.
+///
+/// `setparams` riscrive i metadati senza toccare i pixel. Le opzioni di output
+/// `-colorspace`/`-color_primaries`/`-color_trc` invece in FFmpeg 9 fanno
+/// convertire i pixel al filtro scale e taggano solo la matrice.
+pub fn color_tag_filter(info: &MediaInfo) -> Option<String> {
+    let hd = info.width.is_some_and(|width| width >= 1280)
+        || info.height.is_some_and(|height| height >= 720);
+    if !hd {
+        return None;
+    }
+    let tags = [
+        ("colorspace", &info.color_space),
+        ("color_primaries", &info.color_primaries),
+        ("color_trc", &info.color_transfer),
+    ];
+    if tags
+        .iter()
+        .any(|(_, value)| value.as_deref().is_some_and(|value| value != "bt709"))
+    {
+        return None;
+    }
+    let missing: Vec<String> = tags
+        .iter()
+        .filter(|(_, value)| value.is_none())
+        .map(|(option, _)| format!("{option}=bt709"))
+        .collect();
+    (!missing.is_empty()).then(|| format!("setparams={}", missing.join(":")))
+}
+
+/// Catena `-vf`: scala, poi tag colore. `None` se non serve alcun filtro.
+pub fn video_filter(params: &EncodingParams, info: &MediaInfo) -> Option<String> {
+    let filters: Vec<String> = [scale_filter(params.scale_height), color_tag_filter(info)]
+        .into_iter()
+        .flatten()
+        .collect();
+    (!filters.is_empty()).then(|| filters.join(","))
+}
+
 fn common_input_args(params: &EncodingParams, input: &Path) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec![
         "-nostdin".into(),
@@ -71,8 +117,8 @@ fn common_input_args(params: &EncodingParams, input: &Path) -> Vec<OsString> {
 
 pub(crate) fn video_encoder_args(params: &EncodingParams, info: &MediaInfo) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec!["-c:v".into(), "libsvtav1".into()];
-    // Nessun filtro in modalità dimensione originale: -vf va omesso, non svuotato.
-    if let Some(filter) = scale_filter(params.scale_height) {
+    // Senza scala né tag colore -vf va omesso, non svuotato.
+    if let Some(filter) = video_filter(params, info) {
         args.push("-vf".into());
         args.push(filter.into());
     }
@@ -376,7 +422,101 @@ mod tests {
             source_audio_bitrate_bps: None,
             width: Some(1920),
             height: Some(1080),
+            color_space: Some("bt709".into()),
+            color_primaries: Some("bt709".into()),
+            color_transfer: Some("bt709".into()),
         }
+    }
+
+    fn untagged(width: u32, height: u32) -> MediaInfo {
+        MediaInfo {
+            width: Some(width),
+            height: Some(height),
+            color_space: None,
+            color_primaries: None,
+            color_transfer: None,
+            ..info(60.0, 1)
+        }
+    }
+
+    const BT709: &str = "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709";
+
+    #[test]
+    fn un_hd_senza_tag_viene_dichiarato_bt709() {
+        assert_eq!(color_tag_filter(&untagged(1920, 1080)).unwrap(), BT709);
+        assert_eq!(color_tag_filter(&untagged(1280, 720)).unwrap(), BT709);
+        // Il 2.39:1 a 1280 di larghezza resta HD anche sotto i 720 righe.
+        assert_eq!(color_tag_filter(&untagged(1280, 536)).unwrap(), BT709);
+    }
+
+    #[test]
+    fn un_sd_senza_tag_resta_senza_tag() {
+        assert_eq!(color_tag_filter(&untagged(720, 576)), None);
+        assert_eq!(color_tag_filter(&untagged(1024, 576)), None);
+        let unknown = MediaInfo {
+            width: None,
+            height: None,
+            ..untagged(0, 0)
+        };
+        assert_eq!(color_tag_filter(&unknown), None);
+    }
+
+    #[test]
+    fn si_aggiungono_solo_i_tag_mancanti() {
+        let partial = MediaInfo {
+            color_space: Some("bt709".into()),
+            ..untagged(1920, 1080)
+        };
+        assert_eq!(
+            color_tag_filter(&partial).unwrap(),
+            "setparams=color_primaries=bt709:color_trc=bt709"
+        );
+        // Già completo: nessun filtro.
+        assert_eq!(color_tag_filter(&info(60.0, 1)), None);
+    }
+
+    #[test]
+    fn un_sorgente_con_altri_tag_non_viene_toccato() {
+        let hdr = MediaInfo {
+            color_space: Some("bt2020nc".into()),
+            color_transfer: Some("smpte2084".into()),
+            ..untagged(3840, 2160)
+        };
+        assert_eq!(color_tag_filter(&hdr), None);
+        let bt601 = MediaInfo {
+            color_space: Some("smpte170m".into()),
+            ..untagged(1920, 1080)
+        };
+        assert_eq!(color_tag_filter(&bt601), None);
+    }
+
+    #[test]
+    fn i_tag_colore_seguono_la_scala_nella_catena_vf() {
+        let params = EncodingParams::default();
+        let args = as_strings(&build_crf_args(
+            &params,
+            &untagged(1920, 1080),
+            Path::new("/in/a.mp4"),
+            Path::new("/tmp/a.mkv"),
+        ));
+        let index = args.iter().position(|arg| arg == "-vf").unwrap();
+        assert_eq!(
+            args[index + 1],
+            format!("scale=-2:trunc(min(480\\,ih)/2)*2:reset_sar=1,{BT709}")
+        );
+
+        let original = EncodingParams {
+            scale_height: 0,
+            ..EncodingParams::default()
+        };
+        let args = as_strings(&build_crf_args(
+            &original,
+            &untagged(1920, 1080),
+            Path::new("/in/a.mp4"),
+            Path::new("/tmp/a.mkv"),
+        ));
+        let index = args.iter().position(|arg| arg == "-vf").unwrap();
+        assert_eq!(args[index + 1], BT709);
     }
 
     #[test]
