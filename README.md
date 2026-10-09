@@ -95,8 +95,8 @@ passarla al `Dockerfile` applicativo:
 
 ```bash
 docker build -f Dockerfile.ffmpeg-svtav1 \
-  -t local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0 .
-docker build --build-arg FFMPEG_IMAGE=local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0 \
+  -t local/ffmpeg-svtav1:9.0.2-svt4.2.0-vmaf3.2.1 .
+docker build --build-arg FFMPEG_IMAGE=local/ffmpeg-svtav1:9.0.2-svt4.2.0-vmaf3.2.1 \
   -t av1webconverter:local .
 ```
 

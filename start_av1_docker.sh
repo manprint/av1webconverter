@@ -16,7 +16,7 @@ remote_user="${REMOTE_USER:-ubuntu}"
 remote_host="${REMOTE_HOST:-212.227.88.91}"
 
 # Dopo il push su Docker Hub, impostare FFMPEG_IMAGE con il riferimento completo
-# (es. utente/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0) su entrambi gli host.
+# (es. utente/ffmpeg-svtav1:9.0.2-svt4.2.0-vmaf3.2.1) su entrambi gli host.
 ffmpeg_image="${FFMPEG_IMAGE:-fabiop85/ffmpeg-netflix:latest}"
 
 usage() {

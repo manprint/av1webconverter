@@ -8,14 +8,14 @@
 # checksum. Va costruita (o scaricata) prima:
 #
 #   docker build -f Dockerfile.ffmpeg-svtav1 \
-#     -t local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0 .
+#     -t local/ffmpeg-svtav1:9.0.2-svt4.2.0-vmaf3.2.1 .
 #   docker build -t av1webconverter:local .
 #
 # Per usare la base pubblicata dal workflow su GHCR:
-#   docker build --build-arg FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.1-svt4.2.0-vmaf3.2.0 -t av1webconverter:local .
+#   docker build --build-arg FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.2-svt4.2.0-vmaf3.2.1 -t av1webconverter:local .
 
-ARG FFMPEG_IMAGE=local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0
-ARG RUST_IMAGE=rust:1.96-bookworm
+ARG FFMPEG_IMAGE=local/ffmpeg-svtav1:9.0.2-svt4.2.0-vmaf3.2.1
+ARG RUST_IMAGE=rust:1.99-trixie
 
 FROM ${FFMPEG_IMAGE} AS ffmpeg
 
@@ -38,7 +38,7 @@ RUN touch src/main.rs src/lib.rs \
     && cargo build --release --locked \
     && strip target/release/av1webconverter
 
-FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
 
 # ffmpeg non richiede libopus dinamica; ca-certificates serve alle notifiche
 # Slack in HTTPS, curl al healthcheck.
