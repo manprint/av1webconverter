@@ -236,6 +236,13 @@ parità di file, perché su schermo piccolo gli artefatti si vedono meno; punteg
 ottenuti con modelli diversi non sono confrontabili. Il modello si può impostare
 con `AV1WC_VMAF_MODEL`.
 
+Con un sorgente da 45 fps in su, un modello v1 passa da solo alla sua variante
+`_hfr_` (per esempio `vmaf_v1.0.16_hfr_5d0h`), tarata su 50/60 fps. Su un clip
+a 60 fps il modello standard dà circa 0,75 punti in meno della variante HFR:
+in modalità `vmaf_analysis` scarterebbe CRF che raggiungono il target,
+producendo file più grandi del necessario. Il log del file segnala il cambio e
+il risultato riporta il modello effettivamente usato.
+
 Il confronto avviene alla risoluzione di uscita: quando l'output è ridimensionato,
 il sorgente viene riscalato alla stessa geometria. Il punteggio misura quindi la
 perdita da compressione e non quella dovuta al ridimensionamento.

@@ -1168,6 +1168,59 @@ async fn un_file_corto_viene_analizzato_per_intero() {
 }
 
 #[tokio::test]
+async fn a_60_fps_la_vmaf_usa_il_modello_hfr() {
+    if !common::ffmpeg_with_svtav1() || !common::ffmpeg_with_libvmaf() {
+        eprintln!("ffmpeg con SVT-AV1, reset_sar e libvmaf non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("sessanta.mp4");
+    common::make_test_video_at(&source, 3, 60, "640x360");
+
+    // Misura dopo la conversione.
+    let job: serde_json::Value = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({ "name": "misura 60 fps", "params": { "measure_vmaf": true } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    assert_eq!(job["params"]["vmaf_model"], "vmaf_v1.0.16_5d0h");
+    let uploaded = upload_file(&server, &job_id, "sessanta.mp4", &source).await;
+    let file_id = uploaded["job"]["files"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/start")))
+        .send()
+        .await
+        .unwrap();
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "{job}");
+    let vmaf = &job["files"][0]["vmaf"];
+    assert_eq!(vmaf["model"], "vmaf_v1.0.16_hfr_5d0h", "{vmaf}");
+    assert!(vmaf["score"].as_f64().is_some(), "{vmaf}");
+    let log = file_log_text(&server, &job_id, &file_id).await;
+    assert!(log.contains("alto frame rate"), "{log}");
+
+    // Analisi preliminare: anche le sonde usano la variante HFR.
+    let (job_id, _file_id) =
+        start_analysis_job(&server, &source, "analisi 60 fps", 1, 1, 50.0).await;
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "{job}");
+    let analisi = &job["files"][0]["vmaf_analysis"];
+    assert_eq!(analisi["modello"], "vmaf_v1.0.16_hfr_5d0h", "{analisi}");
+    assert!(analisi["error"].is_null(), "{analisi}");
+}
+
+#[tokio::test]
 async fn un_target_inarrivabile_ripiega_sul_crf_impostato() {
     if !common::ffmpeg_with_svtav1() || !common::ffmpeg_with_libvmaf() {
         eprintln!("ffmpeg con SVT-AV1, reset_sar e libvmaf non disponibile: test saltato");

@@ -23,8 +23,8 @@ use crate::ffmpeg::encode::{
 use crate::ffmpeg::probe::probe;
 use crate::ffmpeg::progress::{format_clock, format_progress_line, format_size, ProgressParser};
 use crate::ffmpeg::vmaf::{
-    build_probe_args, build_vmaf_args, crf_da_testare, parse_vmaf_log, righe_riepilogo, scegli_crf,
-    segmenti_da_analizzare, SondaRequest, VmafRequest,
+    build_probe_args, build_vmaf_args, crf_da_testare, modello_vmaf_effettivo, parse_vmaf_log,
+    righe_riepilogo, scegli_crf, segmenti_da_analizzare, SondaRequest, VmafRequest,
 };
 use crate::models::{
     FileStatus, Job, JobStatus, RisultatoCrf, SegmentoAnalisiPersistito, VmafAnalysis,
@@ -489,6 +489,10 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
     Ok(())
 }
 
+fn nota_modello_hfr(effettivo: &str, configurato: &str) -> String {
+    format!("Sorgente ad alto frame rate: modello VMAF {effettivo} al posto di {configurato}")
+}
+
 // Il contesto comprende sorgente, output, temporanei e canale di cancellazione
 // perché la misura deve restare un passaggio isolato e tollerante agli errori.
 #[allow(clippy::too_many_arguments)]
@@ -505,7 +509,7 @@ async fn measure_vmaf(
     cancel: &mut tokio::sync::watch::Receiver<bool>,
 ) -> VmafMeasurement {
     let started = std::time::Instant::now();
-    let model = params.vmaf_model.clone();
+    let model = modello_vmaf_effettivo(&params.vmaf_model, source_info.frame_rate);
     let error_measurement = |error: String, duration_seconds: f64| VmafMeasurement {
         model: model.clone(),
         duration_seconds,
@@ -520,6 +524,15 @@ async fn measure_vmaf(
         "Misura VMAF dell'output rispetto al sorgente",
     )
     .await;
+    if model != params.vmaf_model {
+        log_line(
+            state,
+            handle.id,
+            file_id,
+            &nota_modello_hfr(&model, &params.vmaf_model),
+        )
+        .await;
+    }
 
     let output_info = match probe(&state.config.ffmpeg.ffprobe_bin, output_path).await {
         Ok(info) => info,
@@ -564,7 +577,7 @@ async fn measure_vmaf(
         distorted: output_path,
         reference: input_path,
         log_json,
-        model: &params.vmaf_model,
+        model: &model,
         pixel_format: &params.pixel_format,
         threads: params.cpus,
         riferimento_inizio: None,
@@ -696,6 +709,16 @@ async fn analizza_file(
             durata_secondi: segmento.durata_secondi,
         })
         .collect::<Vec<_>>();
+    let modello = modello_vmaf_effettivo(&params.vmaf_model, info.frame_rate);
+    if modello != params.vmaf_model {
+        log_line(
+            state,
+            job_id,
+            file_id,
+            &nota_modello_hfr(&modello, &params.vmaf_model),
+        )
+        .await;
+    }
     log_line(
         state,
         job_id,
@@ -710,7 +733,7 @@ async fn analizza_file(
                 .join(", "),
             crf_candidati,
             params.vmaf_target,
-            params.vmaf_model
+            modello
         ),
     )
     .await;
@@ -829,7 +852,7 @@ async fn analizza_file(
                 distorted: sonda_mkv,
                 reference: input_path,
                 log_json: sonda_vmaf_json,
-                model: &params.vmaf_model,
+                model: &modello,
                 pixel_format: &params.pixel_format,
                 threads: params.cpus,
                 riferimento_inizio: Some(segmento.inizio_secondi),
@@ -962,7 +985,7 @@ async fn analizza_file(
         crf_scelto,
         crf_di_partenza: params.crf,
         target: params.vmaf_target,
-        modello: params.vmaf_model.clone(),
+        modello: modello.clone(),
         motivo,
         segmenti: segmenti_persistiti,
         risultati,

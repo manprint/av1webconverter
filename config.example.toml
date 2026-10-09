@@ -93,7 +93,8 @@ overwrite = false
 # Se true, misura il VMAF dell'output definitivo rispetto al sorgente con un
 # passaggio ffmpeg aggiuntivo. La misura non modifica l'output.
 measure_vmaf = false          # AV1WC_MEASURE_VMAF
-# Modello VMAF built-in usato per la misura.
+# Modello VMAF built-in usato per la misura. Dai 45 fps in su un modello v1
+# passa da solo alla variante _hfr_ (es. vmaf_v1.0.16_hfr_5d0h).
 vmaf_model = "vmaf_v1.0.16_5d0h"  # AV1WC_VMAF_MODEL
 
 # Solo in modalità vmaf_analysis: numero di spezzoni casuali.

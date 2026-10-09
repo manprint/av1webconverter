@@ -114,6 +114,12 @@ frame rate del sorgente non è rilevabile.
 un valore non valido viene rifiutato con `400`. La misura è un passaggio ffmpeg
 aggiuntivo e non modifica l'output pubblicato.
 
+Con un sorgente da 45 fps in su, un modello v1 (`vmaf_v1.0.16_5d0h`,
+`_3d0h`, `_3d0h_2160`, `_1d5h_2160`) viene sostituito dalla sua variante
+`_hfr_`, tarata su 50/60 fps; misura e analisi usano lo stesso modello. Gli
+altri modelli restano invariati. `files[].vmaf.model` e
+`files[].vmaf_analysis.modello` riportano il modello effettivamente usato.
+
 `params.mode` può essere `crf` (qualità costante), `target_size` (VBR a due
 passaggi) oppure `vmaf_analysis` (analisi preliminare su spezzoni, seguita dalla
 codifica CRF a un passaggio con il CRF scelto).

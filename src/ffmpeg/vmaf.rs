@@ -72,6 +72,32 @@ pub fn crf_da_testare(crf_di_partenza: u8, step: u32) -> Vec<u8> {
         .collect()
 }
 
+/// Frame rate da cui si passa alla variante HFR dei modelli VMAF v1.
+const FPS_HFR: f64 = 45.0;
+
+/// Varianti v1 che libvmaf offre anche in versione `_hfr_`.
+const VARIANTI_CON_HFR: [&str; 4] = ["5d0h", "3d0h", "3d0h_2160", "1d5h_2160"];
+
+/// Modello VMAF da usare per un sorgente.
+///
+/// I modelli v1 hanno una variante `_hfr_` tarata sui contenuti a 50/60 fps.
+/// Su un 60 fps il modello standard dà circa 0,75 punti in meno della variante
+/// HFR, quindi l'analisi scarterebbe CRF che in realtà raggiungono il target e
+/// produrrebbe file più grandi del necessario. Dai 45 fps in su il modello v1
+/// configurato passa alla sua variante HFR; gli altri modelli, e quelli già
+/// HFR, restano come sono.
+pub fn modello_vmaf_effettivo(modello: &str, frame_rate: Option<(u64, u64)>) -> String {
+    let alto_frame_rate = frame_rate.is_some_and(|(numeratore, denominatore)| {
+        numeratore as f64 / denominatore as f64 >= FPS_HFR
+    });
+    match modello.strip_prefix("vmaf_v1.0.16_") {
+        Some(variante) if alto_frame_rate && VARIANTI_CON_HFR.contains(&variante) => {
+            format!("vmaf_v1.0.16_hfr_{variante}")
+        }
+        _ => modello.to_string(),
+    }
+}
+
 pub struct SondaRequest<'a> {
     pub params: &'a EncodingParams,
     /// Sorgente sondato: serve al GOP, che deve restare quello della codifica
@@ -373,6 +399,42 @@ mod tests {
         assert!(!distorted.contains("setparams"));
         // Dopo la scala, come nella catena di codifica.
         assert!(reference.contains(&format!("reset_sar=1,{tag},format=yuv420p10le[ref]")));
+    }
+
+    #[test]
+    fn ad_alto_frame_rate_si_usa_la_variante_hfr() {
+        for (modello, atteso) in [
+            ("vmaf_v1.0.16_5d0h", "vmaf_v1.0.16_hfr_5d0h"),
+            ("vmaf_v1.0.16_3d0h", "vmaf_v1.0.16_hfr_3d0h"),
+            ("vmaf_v1.0.16_3d0h_2160", "vmaf_v1.0.16_hfr_3d0h_2160"),
+            ("vmaf_v1.0.16_1d5h_2160", "vmaf_v1.0.16_hfr_1d5h_2160"),
+        ] {
+            assert_eq!(modello_vmaf_effettivo(modello, Some((60000, 1001))), atteso);
+            assert_eq!(modello_vmaf_effettivo(modello, Some((50, 1))), atteso);
+        }
+    }
+
+    #[test]
+    fn sotto_i_45_fps_il_modello_resta_quello_configurato() {
+        for frame_rate in [Some((24000, 1001)), Some((25, 1)), Some((30, 1)), None] {
+            assert_eq!(
+                modello_vmaf_effettivo("vmaf_v1.0.16_5d0h", frame_rate),
+                "vmaf_v1.0.16_5d0h"
+            );
+        }
+    }
+
+    #[test]
+    fn i_modelli_senza_variante_hfr_non_cambiano() {
+        for modello in [
+            "vmaf_v0.6.1",
+            "vmaf_v0.6.1neg",
+            "vmaf_4k_v0.6.1",
+            "vmaf_v1.0.16_hfr_5d0h",
+            "vmaf_v1.0.16_sconosciuto",
+        ] {
+            assert_eq!(modello_vmaf_effettivo(modello, Some((60, 1))), modello);
+        }
     }
 
     #[test]
