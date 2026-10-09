@@ -229,13 +229,13 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
         job_id,
         file_id,
         &format!(
-            "Sorgente: durata {:.2}s, {} frame stimati, audio {}",
+            "Sorgente: durata {:.2}s, {} frame stimati, {}",
             info.duration_seconds,
             info.estimated_frames,
-            if info.has_audio {
-                "presente"
-            } else {
-                "assente"
+            match info.audio_streams {
+                0 => "audio assente".to_string(),
+                1 => "1 traccia audio".to_string(),
+                n => format!("{n} tracce audio"),
             }
         ),
     )

@@ -230,6 +230,8 @@ remote_ffmpeg=(
     -b:v 0 -crf "$crf" -preset "$preset"
     -svtav1-params "$svtav1_params"
     -g 240 -pix_fmt yuv420p10le
+    # Downmix stereo: libopus rifiuta il 5.1(side) di AC3, E-AC3 e DTS.
+    -af 'aformat=channel_layouts=mono|stereo'
     -c:a libopus -b:a "$audio_bitrate"
     -f matroska pipe:1
 )

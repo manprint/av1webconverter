@@ -244,7 +244,7 @@ Log di conversione del file, nello stesso formato degli script bash.
   "file_id": "ad1c9172-...",
   "lines": [
     "2026-07-25T21:31:47Z Avvio conversione: stagione1/ep01.mp4",
-    "2026-07-25T21:31:48Z Sorgente: durata 120.00s, 3000 frame stimati, audio presente",
+    "2026-07-25T21:31:48Z Sorgente: durata 120.00s, 3000 frame stimati, 1 traccia audio",
     "2026-07-25T21:31:53Z [Codifica]  42.3% | 00:00:51 / 00:02:00 | frame 1275 | file 12.40 MB | 1234kbits/s | 2.1x | ETA 00:00:33"
   ]
 }

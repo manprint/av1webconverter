@@ -14,11 +14,19 @@ pub struct MediaInfo {
     pub frame_rate: Option<(u64, u64)>,
     /// Frame stimati: durata × frame rate, usato per raffinare il progresso.
     pub estimated_frames: u64,
-    pub has_audio: bool,
+    /// Tracce audio del sorgente: `-map 0:a?` le ricodifica tutte, ciascuna
+    /// con il bitrate audio impostato.
+    pub audio_streams: u32,
     /// Bitrate audio dichiarato dal sorgente, quando disponibile.
     pub source_audio_bitrate_bps: Option<u64>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+}
+
+impl MediaInfo {
+    pub fn has_audio(&self) -> bool {
+        self.audio_streams > 0
+    }
 }
 
 /// Esegue `ffprobe` in JSON e ne ricava durata, frame rate e presenza audio.
@@ -75,12 +83,15 @@ pub fn parse_probe_json(json: &serde_json::Value) -> Result<MediaInfo> {
         .map(|streams| streams.as_slice())
         .unwrap_or(&[]);
 
-    let video = streams
+    let is_type = |stream: &&serde_json::Value, kind: &str| {
+        stream.get("codec_type").and_then(|t| t.as_str()) == Some(kind)
+    };
+    let video = streams.iter().find(|stream| is_type(stream, "video"));
+    let audio = streams.iter().find(|stream| is_type(stream, "audio"));
+    let audio_streams = streams
         .iter()
-        .find(|stream| stream.get("codec_type").and_then(|t| t.as_str()) == Some("video"));
-    let audio = streams
-        .iter()
-        .find(|stream| stream.get("codec_type").and_then(|t| t.as_str()) == Some("audio"));
+        .filter(|stream| is_type(stream, "audio"))
+        .count() as u32;
 
     if video.is_none() {
         bail!("il sorgente non contiene stream video");
@@ -101,7 +112,7 @@ pub fn parse_probe_json(json: &serde_json::Value) -> Result<MediaInfo> {
         duration_seconds,
         frame_rate,
         estimated_frames,
-        has_audio: audio.is_some(),
+        audio_streams,
         source_audio_bitrate_bps: audio
             .and_then(|stream| stream.get("bit_rate"))
             .and_then(|rate| rate.as_str())
@@ -153,9 +164,27 @@ mod tests {
         assert_eq!(info.duration_seconds, 120.5);
         assert_eq!(info.frame_rate, Some((25, 1)));
         assert_eq!(info.estimated_frames, 3013);
-        assert!(info.has_audio);
+        assert!(info.has_audio());
+        assert_eq!(info.audio_streams, 1);
         assert_eq!(info.source_audio_bitrate_bps, Some(128_000));
         assert_eq!(info.height, Some(1080));
+    }
+
+    #[test]
+    fn probe_json_conta_tutte_le_tracce_audio() {
+        let json = serde_json::json!({
+            "format": { "duration": "10" },
+            "streams": [
+                { "codec_type": "video", "avg_frame_rate": "25/1" },
+                { "codec_type": "audio", "bit_rate": "448000" },
+                { "codec_type": "subtitle" },
+                { "codec_type": "audio", "bit_rate": "192000" }
+            ]
+        });
+        let info = parse_probe_json(&json).unwrap();
+        assert_eq!(info.audio_streams, 2);
+        // Il bitrate dichiarato resta quello della prima traccia.
+        assert_eq!(info.source_audio_bitrate_bps, Some(448_000));
     }
 
     #[test]
@@ -165,7 +194,8 @@ mod tests {
             "streams": [{ "codec_type": "video", "avg_frame_rate": "30/1" }]
         });
         let info = parse_probe_json(&json).unwrap();
-        assert!(!info.has_audio);
+        assert!(!info.has_audio());
+        assert_eq!(info.audio_streams, 0);
         assert_eq!(info.estimated_frames, 300);
     }
 

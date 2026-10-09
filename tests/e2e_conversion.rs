@@ -658,6 +658,45 @@ async fn la_dimensione_originale_non_ridimensiona() {
 }
 
 #[tokio::test]
+async fn un_audio_ac3_5_1_diventa_opus_stereo() {
+    if !common::ffmpeg_with_svtav1() {
+        eprintln!("ffmpeg con SVT-AV1 non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("surround.mp4");
+    common::make_surround_video(&source, 2);
+    assert_eq!(common::audio_streams(&source), ["ac3,6,5.1(side)"]);
+
+    let job: serde_json::Value = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({ "name": "audio 5.1" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    upload_file(&server, &job_id, "surround.mp4", &source).await;
+
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/start")))
+        .send()
+        .await
+        .unwrap();
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    // Senza downmix libopus rifiuta il 5.1(side) e il file fallisce.
+    assert_eq!(job["status"], "completed", "{job}");
+
+    let output_path = server.output_dir.join(&job_id).join("surround_av1.mp4");
+    assert_eq!(common::audio_streams(&output_path), ["opus,2,stereo"]);
+}
+
+#[tokio::test]
 async fn un_sorgente_non_valido_fa_fallire_solo_il_suo_file() {
     if !common::ffmpeg_with_svtav1() {
         eprintln!("ffmpeg con SVT-AV1 e reset_sar non disponibile: test saltato");

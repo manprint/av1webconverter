@@ -89,6 +89,26 @@ pub(crate) fn video_encoder_args(params: &EncodingParams) -> Vec<OsString> {
     args
 }
 
+/// Riduce ogni traccia audio a mono o stereo prima di libopus; il mono resta
+/// mono.
+///
+/// Serve per due motivi. libopus rifiuta il layout `5.1(side)` di AC3, E-AC3 e
+/// DTS ("Invalid channel layout 5.1(side) for specified mapping family -1"),
+/// quindi senza downmix il file intero fallisce. Inoltre 6-8 canali dentro
+/// 48 kbit/s suonano peggio di uno stereo allo stesso bitrate.
+pub const AUDIO_DOWNMIX_FILTER: &str = "aformat=channel_layouts=mono|stereo";
+
+fn audio_encoder_args(params: &EncodingParams) -> [OsString; 6] {
+    [
+        "-af".into(),
+        AUDIO_DOWNMIX_FILTER.into(),
+        "-c:a".into(),
+        "libopus".into(),
+        "-b:a".into(),
+        params.audio_bitrate.clone().into(),
+    ]
+}
+
 /// Codifica a qualità costante, un solo passaggio.
 pub fn build_crf_args(params: &EncodingParams, input: &Path, output_mkv: &Path) -> Vec<OsString> {
     let mut args = common_input_args(params, input);
@@ -99,10 +119,9 @@ pub fn build_crf_args(params: &EncodingParams, input: &Path, output_mkv: &Path) 
         "0".into(),
         "-crf".into(),
         params.crf.to_string().into(),
-        "-c:a".into(),
-        "libopus".into(),
-        "-b:a".into(),
-        params.audio_bitrate.clone().into(),
+    ]);
+    args.extend(audio_encoder_args(params));
+    args.extend([
         "-f".into(),
         "matroska".into(),
         output_mkv.as_os_str().to_owned(),
@@ -146,11 +165,8 @@ pub fn build_two_pass_args(
             },
         ]);
     } else {
+        args.extend(audio_encoder_args(params));
         args.extend([
-            "-c:a".into(),
-            "libopus".into(),
-            "-b:a".into(),
-            params.audio_bitrate.clone().into(),
             "-f".into(),
             "matroska".into(),
             output_mkv.as_os_str().to_owned(),
@@ -182,7 +198,8 @@ pub fn build_remux_args(input_mkv: &Path, output_mp4: &Path) -> Vec<OsString> {
 }
 
 /// Bitrate video per centrare la dimensione richiesta: dal target si sottrae il
-/// margine per l'overhead del contenitore e lo spazio delle tracce audio.
+/// margine per l'overhead del contenitore e lo spazio delle tracce audio, una
+/// quota per ogni traccia perché ciascuna viene codificata al bitrate audio.
 pub fn compute_video_bitrate(params: &EncodingParams, info: &MediaInfo) -> Result<u64> {
     let target_mb = params
         .target_size_mb
@@ -193,15 +210,15 @@ pub fn compute_video_bitrate(params: &EncodingParams, info: &MediaInfo) -> Resul
 
     let target_bits = target_mb * 1_000_000.0 * 8.0;
     let usable_bits = target_bits * (1.0 - params.size_margin_percent / 100.0);
-    let audio_bits = if info.has_audio {
-        parse_bitrate(&params.audio_bitrate).unwrap_or(0) as f64 * info.duration_seconds
-    } else {
-        0.0
-    };
+    let audio_bits = parse_bitrate(&params.audio_bitrate).unwrap_or(0) as f64
+        * info.duration_seconds
+        * f64::from(info.audio_streams);
     let video_bits = usable_bits - audio_bits;
     if video_bits <= 0.0 {
         bail!(
-            "dimensione target troppo piccola: {target_mb} MB non bastano nemmeno per l'audio a {}",
+            "dimensione target troppo piccola: {target_mb} MB non bastano nemmeno per l'audio \
+             ({} × {})",
+            info.audio_streams,
             params.audio_bitrate
         );
     }
@@ -344,12 +361,12 @@ mod tests {
             .collect()
     }
 
-    fn info(duration: f64, has_audio: bool) -> MediaInfo {
+    fn info(duration: f64, audio_streams: u32) -> MediaInfo {
         MediaInfo {
             duration_seconds: duration,
             frame_rate: Some((25, 1)),
             estimated_frames: (duration * 25.0) as u64,
-            has_audio,
+            audio_streams,
             source_audio_bitrate_bps: None,
             width: Some(1920),
             height: Some(1080),
@@ -430,7 +447,7 @@ mod tests {
         assert!(joined.contains("-svtav1-params tune=5"));
         assert!(joined.contains("-g 240"));
         assert!(joined.contains("-pix_fmt yuv420p10le"));
-        assert!(joined.contains("-c:a libopus -b:a 48k"));
+        assert!(joined.contains("-af aformat=channel_layouts=mono|stereo -c:a libopus -b:a 48k"));
         assert!(joined.contains("-map 0:v:0 -map 0:a?"));
         assert!(joined.contains("-progress pipe:1"));
         assert!(joined.ends_with("-f matroska /tmp/out.mkv"));
@@ -476,6 +493,7 @@ mod tests {
         assert!(joined.contains("-f null"));
         assert!(!joined.contains("libopus"));
         assert!(!joined.contains("0:a?"));
+        assert!(!args.iter().any(|arg| arg == "-af"));
         // tune=5 non è compatibile con il VBR a due passaggi.
         assert!(joined.contains("-svtav1-params tune=0"));
     }
@@ -497,7 +515,7 @@ mod tests {
         ));
         let joined = args.join(" ");
         assert!(joined.contains("-pass 2"));
-        assert!(joined.contains("-c:a libopus"));
+        assert!(joined.contains("-af aformat=channel_layouts=mono|stereo -c:a libopus"));
         assert!(joined.ends_with("-f matroska /tmp/a.mkv"));
     }
 
@@ -524,8 +542,22 @@ mod tests {
         };
         // 100 MB -> 800.000.000 bit, meno 1% -> 792.000.000, meno audio
         // (48.000 * 100 = 4.800.000) -> 787.200.000 su 100 s.
-        let bitrate = compute_video_bitrate(&params, &info(100.0, true)).unwrap();
+        let bitrate = compute_video_bitrate(&params, &info(100.0, 1)).unwrap();
         assert_eq!(bitrate, 7_872_000);
+    }
+
+    #[test]
+    fn bitrate_target_riserva_spazio_per_ogni_traccia_audio() {
+        let params = EncodingParams {
+            mode: EncodingMode::TargetSize,
+            target_size_mb: Some(100.0),
+            size_margin_percent: 1.0,
+            audio_bitrate: "48k".into(),
+            ..Default::default()
+        };
+        // Come sopra, ma con due tracce: 792.000.000 - 2 * 4.800.000.
+        let bitrate = compute_video_bitrate(&params, &info(100.0, 2)).unwrap();
+        assert_eq!(bitrate, 7_824_000);
     }
 
     #[test]
@@ -536,7 +568,7 @@ mod tests {
             size_margin_percent: 0.0,
             ..Default::default()
         };
-        let bitrate = compute_video_bitrate(&params, &info(100.0, false)).unwrap();
+        let bitrate = compute_video_bitrate(&params, &info(100.0, 0)).unwrap();
         assert_eq!(bitrate, 8_000_000);
     }
 
@@ -547,7 +579,7 @@ mod tests {
             target_size_mb: Some(0.001),
             ..Default::default()
         };
-        assert!(compute_video_bitrate(&params, &info(3600.0, true)).is_err());
+        assert!(compute_video_bitrate(&params, &info(3600.0, 1)).is_err());
     }
 
     #[test]

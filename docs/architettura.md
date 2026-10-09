@@ -13,7 +13,7 @@ nessun servizio esterno obbligatorio.
 | `store`            | persistenza: un JSON per job, scritto in modo atomico                  |
 | `state`            | `AppState`: registro dei job, percorsi, mutazioni, ripristino a caldo  |
 | `worker`           | esecuzione dei job: probe, codifica, remux, stati finali              |
-| `ffmpeg::probe`    | `ffprobe` in JSON → durata, frame rate, frame stimati, presenza audio  |
+| `ffmpeg::probe`    | `ffprobe` in JSON → durata, frame rate, frame stimati, tracce audio    |
 | `ffmpeg::encode`   | righe di comando ffmpeg ed esecuzione con progresso e cancellazione    |
 | `ffmpeg::progress` | parser del flusso `-progress` e formattazione delle righe di log       |
 | `joblog`           | log di conversione per file: buffer circolare + append su disco        |
@@ -30,7 +30,7 @@ Riproduce `start_av1_docker.sh`, senza la parte SSH:
    senza durata valida o senza stream video fallisce subito.
 2. **Codifica** in Matroska temporaneo con `libsvtav1`:
    `-b:v 0 -crf N -preset P -svtav1-params ... -g 240 -pix_fmt yuv420p10le`,
-   audio `libopus`, filtro
+   audio `libopus` dopo il downmix `aformat=channel_layouts=mono|stereo`, filtro
    `scale=-2:trunc(min(H\,ih)/2)*2:reset_sar=1`.
    In modalità `target_size` due passaggi (`-pass 1` / `-pass 2`) con `-b:v`
    calcolato dal target.

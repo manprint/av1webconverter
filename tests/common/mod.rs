@@ -170,6 +170,57 @@ pub fn make_anamorphic_video(path: &Path, seconds: u32) {
     );
 }
 
+/// Genera un MP4 con audio AC3 5.1(side), il layout di DVD e broadcast che
+/// libopus non accetta così com'è.
+pub fn make_surround_video(path: &Path, seconds: u32) {
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y"])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("testsrc=duration={seconds}:size=640x360:rate=10"),
+        ])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("sine=frequency=440:duration={seconds}"),
+        ])
+        .args(["-af", "pan=5.1(side)|FL=c0|FR=c0|FC=c0|LFE=c0|SL=c0|SR=c0"])
+        .args(["-c:v", "mpeg4", "-q:v", "5", "-c:a", "ac3", "-b:a", "384k"])
+        .arg(path)
+        .status()
+        .expect("generazione video con audio 5.1");
+    assert!(
+        status.success(),
+        "ffmpeg non ha generato il video con audio 5.1"
+    );
+}
+
+/// Tracce audio di un file come "codec,canali,layout", secondo ffprobe.
+pub fn audio_streams(path: &Path) -> Vec<String> {
+    let output = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=codec_name,channels,channel_layout",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .expect("ffprobe sulle tracce audio");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| line.trim().trim_end_matches(',').to_string())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
 /// Geometria del primo stream video: larghezza, altezza, SAR, DAR.
 pub fn video_geometry(path: &Path) -> (u32, u32, String, String) {
     let output = std::process::Command::new("ffprobe")

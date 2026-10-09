@@ -168,9 +168,9 @@ Usa `crf` e `svtav1_params`.
 
 **`target_size` — dimensione finale desiderata.** VBR a due passaggi. Il bitrate
 video è calcolato sottraendo dal target il margine per l'overhead MP4
-(`size_margin_percent`) e lo spazio della traccia audio Opus. La dimensione è un
-obiettivo, non un limite rigido: per un vincolo stretto alzare il margine (es.
-`size_margin_percent = 2`).
+(`size_margin_percent`) e lo spazio dell'audio Opus, una quota di `audio_bitrate`
+per ogni traccia del sorgente. La dimensione è un obiettivo, non un limite
+rigido: per un vincolo stretto alzare il margine (es. `size_margin_percent = 2`).
 
 **`vmaf_analysis` — Analisi VMAF + Qualità Costante.** Parte dal `crf` impostato,
 prova CRF crescenti di 2 in 2 su spezzoni casuali della durata configurata e usa per la
@@ -401,4 +401,6 @@ Oggi il formato previsto è MP4. La lista `jobs.allowed_extensions` include già
 altri contenitori (`mov`, `mkv`, `avi`, `webm`, `m4v`, `ts`, `mpg`, `mpeg`,
 `wmv`): l'input viene passato a ffmpeg senza assunzioni sul contenitore, quindi
 per abilitarne altri basta aggiungerli in configurazione. L'output è sempre MP4
-con video AV1 e audio Opus.
+con video AV1 e audio Opus. Ogni traccia audio viene ridotta a stereo, il mono
+resta mono: libopus rifiuta il 5.1(side) di AC3, E-AC3 e DTS, e a 48 kbit/s uno
+stereo suona meglio di sei canali compressi.
