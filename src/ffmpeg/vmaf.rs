@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{bail, Result};
 
-use crate::config::EncodingParams;
+use crate::config::{fps_plausibile, EncodingParams};
 use crate::ffmpeg::encode::video_encoder_args;
 use crate::ffmpeg::probe::MediaInfo;
 use crate::models::{MotivoScelta, RisultatoCrf, VmafAnalysis};
@@ -85,11 +85,10 @@ const VARIANTI_CON_HFR: [&str; 4] = ["5d0h", "3d0h", "3d0h_2160", "1d5h_2160"];
 /// HFR, quindi l'analisi scarterebbe CRF che in realtà raggiungono il target e
 /// produrrebbe file più grandi del necessario. Dai 45 fps in su il modello v1
 /// configurato passa alla sua variante HFR; gli altri modelli, e quelli già
-/// HFR, restano come sono.
+/// HFR, restano come sono. Un frame rate non plausibile vale come assente,
+/// come per il GOP.
 pub fn modello_vmaf_effettivo(modello: &str, frame_rate: Option<(u64, u64)>) -> String {
-    let alto_frame_rate = frame_rate.is_some_and(|(numeratore, denominatore)| {
-        numeratore as f64 / denominatore as f64 >= FPS_HFR
-    });
+    let alto_frame_rate = fps_plausibile(frame_rate).is_some_and(|fps| fps >= FPS_HFR);
     match modello.strip_prefix("vmaf_v1.0.16_") {
         Some(variante) if alto_frame_rate && VARIANTI_CON_HFR.contains(&variante) => {
             format!("vmaf_v1.0.16_hfr_{variante}")
@@ -415,8 +414,14 @@ mod tests {
     }
 
     #[test]
-    fn sotto_i_45_fps_il_modello_resta_quello_configurato() {
-        for frame_rate in [Some((24000, 1001)), Some((25, 1)), Some((30, 1)), None] {
+    fn sotto_i_45_fps_o_senza_frame_rate_plausibile_il_modello_resta_quello_configurato() {
+        for frame_rate in [
+            Some((24000, 1001)),
+            Some((25, 1)),
+            Some((30, 1)),
+            Some((90000, 1)),
+            None,
+        ] {
             assert_eq!(
                 modello_vmaf_effettivo("vmaf_v1.0.16_5d0h", frame_rate),
                 "vmaf_v1.0.16_5d0h"

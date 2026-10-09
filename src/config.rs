@@ -196,18 +196,24 @@ impl EncodingParams {
     /// Con `keyint_seconds` attivo il GOP dura lo stesso tempo a ogni frame
     /// rate: 240 fotogrammi fissi sono 10 s a 24 fps ma solo 4 s a 60 fps, e un
     /// GOP da 4 s costa dal 4 al 34% di file in più a parità di CRF senza
-    /// guadagnare qualità. Senza frame rate, o con un valore implausibile come
-    /// il 90000/1 di alcuni contenitori VFR, si torna a `keyint`.
+    /// guadagnare qualità. Senza un frame rate plausibile si torna a `keyint`.
     pub fn effective_keyint(&self, frame_rate: Option<(u64, u64)>) -> u32 {
-        let Some((numerator, denominator)) = frame_rate else {
-            return self.keyint;
-        };
-        let fps = numerator as f64 / denominator as f64;
-        if self.keyint_seconds <= 0.0 || !(1.0..=1000.0).contains(&fps) {
-            return self.keyint;
+        match fps_plausibile(frame_rate) {
+            Some(fps) if self.keyint_seconds > 0.0 => {
+                ((fps * self.keyint_seconds).round() as u32).max(1)
+            }
+            _ => self.keyint,
         }
-        ((fps * self.keyint_seconds).round() as u32).max(1)
     }
+}
+
+/// Frame rate del sorgente in fps, se plausibile. Alcuni contenitori VFR
+/// dichiarano valori come 90000/1, che non descrivono il video: GOP e modello
+/// VMAF li trattano come un frame rate assente.
+pub fn fps_plausibile(frame_rate: Option<(u64, u64)>) -> Option<f64> {
+    let (numerator, denominator) = frame_rate?;
+    let fps = numerator as f64 / denominator as f64;
+    (1.0..=1000.0).contains(&fps).then_some(fps)
 }
 
 /// Converte "48k" / "48K" / "48000" in bit al secondo.
@@ -702,6 +708,15 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(fisso.effective_keyint(Some((60, 1))), 120);
+    }
+
+    #[test]
+    fn i_frame_rate_dei_contenitori_vfr_non_sono_plausibili() {
+        let ntsc = fps_plausibile(Some((30000, 1001))).unwrap();
+        assert!((ntsc - 29.97).abs() < 0.001);
+        assert_eq!(fps_plausibile(Some((90000, 1))), None);
+        assert_eq!(fps_plausibile(Some((1, 0))), None);
+        assert_eq!(fps_plausibile(None), None);
     }
 
     #[test]

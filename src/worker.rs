@@ -13,7 +13,7 @@ use futures::StreamExt;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::config::{EncodingMode, EncodingParams};
+use crate::config::{fps_plausibile, EncodingMode, EncodingParams};
 use crate::error::{ApiError, ApiResult};
 use crate::events::Event;
 use crate::ffmpeg::encode::{
@@ -245,13 +245,12 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
         state,
         job_id,
         file_id,
-        &match info.frame_rate {
-            Some((numerator, denominator)) => format!(
-                "Keyframe ogni {gop} fotogrammi ({:.1} s a {:.3} fps)",
-                f64::from(gop) * denominator as f64 / numerator as f64,
-                numerator as f64 / denominator as f64
+        &match fps_plausibile(info.frame_rate) {
+            Some(fps) => format!(
+                "Keyframe ogni {gop} fotogrammi ({:.1} s a {fps:.3} fps)",
+                f64::from(gop) / fps
             ),
-            None => format!("Keyframe ogni {gop} fotogrammi (frame rate non rilevato)"),
+            None => format!("Keyframe ogni {gop} fotogrammi (frame rate assente o non plausibile)"),
         },
     )
     .await;
