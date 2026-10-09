@@ -258,6 +258,13 @@ Il confronto avviene alla risoluzione di uscita: quando l'output è ridimensiona
 il sorgente viene riscalato alla stessa geometria. Il punteggio misura quindi la
 perdita da compressione e non quella dovuta al ridimensionamento.
 
+Ogni frame dell'output è confrontato con il frame del sorgente più vicino nel
+tempo (`ts_sync_mode=nearest`). Il Matroska intermedio arrotonda i timestamp al
+millisecondo e, con la sincronizzazione di default, a 24, 30 o 60 fps un frame su
+tre veniva confrontato con il frame precedente: su un clip a 60 fps il VMAF
+risultava 76,2 invece di 96,5, e l'analisi sceglieva CRF più bassi del
+necessario o ripiegava sul CRF impostato.
+
 Esempio di job con misura attiva:
 
 ```json

@@ -807,6 +807,7 @@ async fn un_sorgente_hd_senza_tag_viene_dichiarato_bt709() {
         "setparams=colorspace=unknown:color_primaries=unknown:color_trc=unknown,",
         &source,
         &format!("scale=w={width}:h={height}:flags=bicubic:reset_sar=1,"),
+        "vmaf_v1.0.16_5d0h",
     );
     assert!(
         (score - expected).abs() < 0.001,
@@ -1206,9 +1207,20 @@ async fn a_60_fps_la_vmaf_usa_il_modello_hfr() {
     assert_eq!(job["status"], "completed", "{job}");
     let vmaf = &job["files"][0]["vmaf"];
     assert_eq!(vmaf["model"], "vmaf_v1.0.16_hfr_5d0h", "{vmaf}");
-    assert!(vmaf["score"].as_f64().is_some(), "{vmaf}");
     let log = file_log_text(&server, &job_id, &file_id).await;
     assert!(log.contains("alto frame rate"), "{log}");
+
+    // A 60 fps il Matroska intermedio arrotonda i timestamp al millisecondo:
+    // il punteggio deve restare quello del confronto frame per frame.
+    let score = vmaf["score"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("VMAF assente: {vmaf}"));
+    let output_path = server.output_dir.join(&job_id).join("sessanta_av1.mp4");
+    let expected = common::vmaf_score(&output_path, "", &source, "", "vmaf_v1.0.16_hfr_5d0h");
+    assert!(
+        (score - expected).abs() < 0.01,
+        "VMAF {score} diverso dal confronto frame per frame {expected}"
+    );
 
     // Analisi preliminare: anche le sonde usano la variante HFR.
     let (job_id, _file_id) =

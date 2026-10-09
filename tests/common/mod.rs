@@ -253,12 +253,15 @@ pub fn vmaf_score(
     distorted_filters: &str,
     reference: &Path,
     reference_filters: &str,
+    model: &str,
 ) -> f64 {
     let log = distorted.with_extension("verifica.json");
+    // Abbina i frame per indice, senza dipendere dai timestamp: è il confronto
+    // di riferimento per la sincronizzazione usata dall'applicazione.
     let graph = format!(
-        "[0:v]settb=AVTB,setpts=PTS-STARTPTS,{distorted_filters}format=yuv420p10le[dist];\
-         [1:v]settb=AVTB,setpts=PTS-STARTPTS,{reference_filters}format=yuv420p10le[ref];\
-         [dist][ref]libvmaf=model=version=vmaf_v1.0.16_5d0h:log_fmt=json:log_path={}",
+        "[0:v]settb=AVTB,setpts=N,{distorted_filters}format=yuv420p10le[dist];\
+         [1:v]settb=AVTB,setpts=N,{reference_filters}format=yuv420p10le[ref];\
+         [dist][ref]libvmaf=model=version={model}:log_fmt=json:log_path={}",
         log.display()
     );
     let status = std::process::Command::new("ffmpeg")

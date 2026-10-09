@@ -187,8 +187,13 @@ pub fn build_vmaf_args(request: &VmafRequest<'_>) -> Vec<OsString> {
     // Le basi tempi vengono allineate perché MP4 e sorgente possono usare timebase diverse.
     // format porta entrambi i rami a profondità e formato accettati da libvmaf.
     reference_branch.push_str(&format!(",format={}[ref]", request.pixel_format));
+    // Il Matroska intermedio arrotonda i timestamp al millisecondo: a 24, 30 o
+    // 60 fps un frame su tre del distorto cade poco prima del suo gemello nel
+    // riferimento, e la sincronizzazione di default di libvmaf lo confronta con
+    // il frame precedente. Su un 60 fps il punteggio scendeva da 96,5 a 76,2.
+    // `nearest` abbina il frame del riferimento più vicino nel tempo.
     let mut filter = format!(
-        "[0:v]settb=AVTB,setpts=PTS-STARTPTS,format={}[dist];{};[dist][ref]libvmaf=model=version={}:log_fmt=json:log_path={}",
+        "[0:v]settb=AVTB,setpts=PTS-STARTPTS,format={}[dist];{};[dist][ref]libvmaf=model=version={}:log_fmt=json:log_path={}:ts_sync_mode=nearest",
         request.pixel_format,
         reference_branch,
         request.model,
@@ -449,6 +454,13 @@ mod tests {
         assert!(filter.contains("libvmaf=model=version=vmaf_v1.0.16_5d0h"));
         assert!(filter.contains("log_fmt=json"));
         assert!(filter.contains("log_path=vmaf.json"));
+    }
+
+    #[test]
+    fn i_frame_sono_abbinati_al_timestamp_piu_vicino() {
+        let filter = filter(&build_vmaf_args(&request(None, Some(4))));
+        assert!(filter.contains(":ts_sync_mode=nearest"), "{filter}");
+        assert!(filter.ends_with(":n_threads=4"), "{filter}");
     }
 
     #[test]
