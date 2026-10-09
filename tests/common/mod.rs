@@ -127,13 +127,18 @@ pub fn ffmpeg_with_libvmaf() -> bool {
 
 /// Genera un MP4 di prova con traccia video e audio.
 pub fn make_test_video(path: &Path, seconds: u32) {
+    make_test_video_at(path, seconds, 10);
+}
+
+/// Come `make_test_video`, con il frame rate indicato.
+pub fn make_test_video_at(path: &Path, seconds: u32, fps: u32) {
     let status = std::process::Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error", "-y"])
         .args([
             "-f",
             "lavfi",
             "-i",
-            &format!("testsrc=duration={seconds}:size=640x360:rate=10"),
+            &format!("testsrc=duration={seconds}:size=640x360:rate={fps}"),
         ])
         .args([
             "-f",
@@ -218,6 +223,32 @@ pub fn audio_streams(path: &Path) -> Vec<String> {
         .lines()
         .map(|line| line.trim().trim_end_matches(',').to_string())
         .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// Istanti dei keyframe del primo stream video, dai flag dei pacchetti: non
+/// serve decodificare.
+pub fn keyframe_times(path: &Path) -> Vec<f64> {
+    let output = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "packet=pts_time,flags",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .expect("ffprobe sui pacchetti");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (time, flags) = line.split_once(',')?;
+            flags.contains('K').then(|| time.parse().ok())?
+        })
         .collect()
 }
 

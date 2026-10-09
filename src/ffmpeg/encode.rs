@@ -69,7 +69,7 @@ fn common_input_args(params: &EncodingParams, input: &Path) -> Vec<OsString> {
     args
 }
 
-pub(crate) fn video_encoder_args(params: &EncodingParams) -> Vec<OsString> {
+pub(crate) fn video_encoder_args(params: &EncodingParams, info: &MediaInfo) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec!["-c:v".into(), "libsvtav1".into()];
     // Nessun filtro in modalità dimensione originale: -vf va omesso, non svuotato.
     if let Some(filter) = scale_filter(params.scale_height) {
@@ -82,7 +82,7 @@ pub(crate) fn video_encoder_args(params: &EncodingParams) -> Vec<OsString> {
         "-svtav1-params".into(),
         params.effective_svtav1_params().into(),
         "-g".into(),
-        params.keyint.to_string().into(),
+        params.effective_keyint(info.frame_rate).to_string().into(),
         "-pix_fmt".into(),
         params.pixel_format.clone().into(),
     ]);
@@ -110,10 +110,15 @@ fn audio_encoder_args(params: &EncodingParams) -> [OsString; 6] {
 }
 
 /// Codifica a qualità costante, un solo passaggio.
-pub fn build_crf_args(params: &EncodingParams, input: &Path, output_mkv: &Path) -> Vec<OsString> {
+pub fn build_crf_args(
+    params: &EncodingParams,
+    info: &MediaInfo,
+    input: &Path,
+    output_mkv: &Path,
+) -> Vec<OsString> {
     let mut args = common_input_args(params, input);
     args.extend(["-map".into(), "0:v:0".into(), "-map".into(), "0:a?".into()]);
-    args.extend(video_encoder_args(params));
+    args.extend(video_encoder_args(params, info));
     args.extend([
         "-b:v".into(),
         "0".into(),
@@ -133,6 +138,7 @@ pub fn build_crf_args(params: &EncodingParams, input: &Path, output_mkv: &Path) 
 /// scarta l'output e non tocca l'audio.
 pub fn build_two_pass_args(
     params: &EncodingParams,
+    info: &MediaInfo,
     input: &Path,
     output_mkv: &Path,
     passlogfile: &Path,
@@ -144,7 +150,7 @@ pub fn build_two_pass_args(
     if pass == 2 {
         args.extend(["-map".into(), "0:a?".into()]);
     }
-    args.extend(video_encoder_args(params));
+    args.extend(video_encoder_args(params, info));
     args.extend([
         "-b:v".into(),
         format!("{video_bitrate_bps}").into(),
@@ -402,6 +408,7 @@ mod tests {
         };
         let args = as_strings(&build_crf_args(
             &params,
+            &info(60.0, 1),
             Path::new("/in/a.mp4"),
             Path::new("/tmp/a.mkv"),
         ));
@@ -420,6 +427,7 @@ mod tests {
         };
         let args = as_strings(&build_two_pass_args(
             &params,
+            &info(60.0, 1),
             Path::new("/in/a.mp4"),
             Path::new("/tmp/a.mkv"),
             Path::new("/tmp/a.log"),
@@ -435,6 +443,7 @@ mod tests {
         let params = EncodingParams::default();
         let args = build_crf_args(
             &params,
+            &info(60.0, 1),
             &PathBuf::from("/in/film.mp4"),
             &PathBuf::from("/tmp/out.mkv"),
         );
@@ -445,7 +454,8 @@ mod tests {
         assert!(joined.contains("-b:v 0 -crf 47"));
         assert!(joined.contains("-preset 1"));
         assert!(joined.contains("-svtav1-params tune=5"));
-        assert!(joined.contains("-g 240"));
+        // 25 fps per 10 s.
+        assert!(joined.contains("-g 250"));
         assert!(joined.contains("-pix_fmt yuv420p10le"));
         assert!(joined.contains("-af aformat=channel_layouts=mono|stereo -c:a libopus -b:a 48k"));
         assert!(joined.contains("-map 0:v:0 -map 0:a?"));
@@ -454,10 +464,33 @@ mod tests {
     }
 
     #[test]
+    fn il_gop_segue_il_frame_rate_del_sorgente() {
+        let params = EncodingParams::default();
+        let gop = |frame_rate| {
+            let source = MediaInfo {
+                frame_rate,
+                ..info(60.0, 1)
+            };
+            let args = as_strings(&build_crf_args(
+                &params,
+                &source,
+                Path::new("/in/a.mp4"),
+                Path::new("/tmp/a.mkv"),
+            ));
+            let index = args.iter().position(|arg| arg == "-g").unwrap();
+            args[index + 1].clone()
+        };
+        assert_eq!(gop(Some((60, 1))), "600");
+        assert_eq!(gop(Some((24000, 1001))), "240");
+        assert_eq!(gop(None), "240");
+    }
+
+    #[test]
     fn comando_crf_include_i_thread_solo_se_richiesti() {
         let mut params = EncodingParams::default();
         assert!(!as_strings(&build_crf_args(
             &params,
+            &info(60.0, 1),
             Path::new("/in/a.mp4"),
             Path::new("/tmp/a.mkv")
         ))
@@ -465,6 +498,7 @@ mod tests {
         params.cpus = Some(4);
         let args = as_strings(&build_crf_args(
             &params,
+            &info(60.0, 1),
             Path::new("/in/a.mp4"),
             Path::new("/tmp/a.mkv"),
         ));
@@ -481,6 +515,7 @@ mod tests {
         };
         let args = as_strings(&build_two_pass_args(
             &params,
+            &info(60.0, 1),
             Path::new("/in/a.mp4"),
             Path::new("/tmp/a.mkv"),
             Path::new("/tmp/a.log"),
@@ -507,6 +542,7 @@ mod tests {
         };
         let args = as_strings(&build_two_pass_args(
             &params,
+            &info(60.0, 1),
             Path::new("/in/a.mp4"),
             Path::new("/tmp/a.mkv"),
             Path::new("/tmp/a.log"),

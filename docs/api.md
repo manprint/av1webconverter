@@ -102,6 +102,12 @@ dimensione originale, cioè nessun ridimensionamento e rapporto dei pixel del
 sorgente conservato. Sono ammessi `0` e i valori fra 16 e 4320; l'interfaccia
 web propone un sottoinsieme di valori comuni, l'API accetta tutto l'intervallo.
 
+`params.keyint_seconds` (default `10`) è la distanza fra keyframe in secondi: il
+backend la converte in frame dal frame rate del sorgente,
+`round(fps × keyint_seconds)`. Sono ammessi i valori fra 0 e 60. Con `0` vale
+`params.keyint`, in frame (default `240`, fra 1 e 3000), usato anche quando il
+frame rate del sorgente non è rilevabile.
+
 `params.measure_vmaf` abilita la misura VMAF dopo la conversione (default
 `false`). `params.vmaf_model` seleziona il modello built-in di libvmaf (default
 `vmaf_v1.0.16_5d0h`). Il nome del modello deve contenere solo caratteri sicuri;

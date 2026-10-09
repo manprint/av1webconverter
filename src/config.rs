@@ -39,8 +39,12 @@ pub struct EncodingParams {
     /// Passato a `-svtav1-params`. In modalità `target_size` viene forzato `tune=0`.
     pub svtav1_params: String,
     pub pixel_format: String,
-    /// Distanza massima fra keyframe (`-g`).
+    /// Distanza massima fra keyframe (`-g`) in fotogrammi. Vale quando
+    /// `keyint_seconds` è 0 e quando il frame rate del sorgente non è noto.
     pub keyint: u32,
+    /// Distanza fra keyframe in secondi: `-g` diventa `round(fps × valore)`,
+    /// così il GOP copre lo stesso tempo a 24 e a 60 fps. `0` usa `keyint`.
+    pub keyint_seconds: f64,
     /// Numero di thread concessi a ffmpeg; `None` lascia decidere ffmpeg.
     pub cpus: Option<u32>,
     /// Periodo di aggiornamento del progresso, in secondi.
@@ -79,6 +83,7 @@ impl Default for EncodingParams {
             svtav1_params: "tune=5".to_string(),
             pixel_format: "yuv420p10le".to_string(),
             keyint: 240,
+            keyint_seconds: 10.0,
             cpus: None,
             progress_interval: 5.0,
             target_size_mb: None,
@@ -143,6 +148,9 @@ impl EncodingParams {
         if self.keyint == 0 || self.keyint > 3000 {
             return Err("keyint deve essere compreso fra 1 e 3000".into());
         }
+        if !(self.keyint_seconds.is_finite() && (0.0..=60.0).contains(&self.keyint_seconds)) {
+            return Err("keyint_seconds deve essere compreso fra 0 (usa keyint) e 60".into());
+        }
         if let Some(cpus) = self.cpus {
             if cpus == 0 || cpus > 256 {
                 return Err("cpus deve essere compreso fra 1 e 256".into());
@@ -181,6 +189,24 @@ impl EncodingParams {
             EncodingMode::Crf | EncodingMode::VmafAnalysis => self.svtav1_params.clone(),
             EncodingMode::TargetSize => "tune=0".to_string(),
         }
+    }
+
+    /// GOP passato a `-g`, in fotogrammi.
+    ///
+    /// Con `keyint_seconds` attivo il GOP dura lo stesso tempo a ogni frame
+    /// rate: 240 fotogrammi fissi sono 10 s a 24 fps ma solo 4 s a 60 fps, e un
+    /// GOP da 4 s costa dal 4 al 34% di file in più a parità di CRF senza
+    /// guadagnare qualità. Senza frame rate, o con un valore implausibile come
+    /// il 90000/1 di alcuni contenitori VFR, si torna a `keyint`.
+    pub fn effective_keyint(&self, frame_rate: Option<(u64, u64)>) -> u32 {
+        let Some((numerator, denominator)) = frame_rate else {
+            return self.keyint;
+        };
+        let fps = numerator as f64 / denominator as f64;
+        if self.keyint_seconds <= 0.0 || !(1.0..=1000.0).contains(&fps) {
+            return self.keyint;
+        }
+        ((fps * self.keyint_seconds).round() as u32).max(1)
     }
 }
 
@@ -489,6 +515,11 @@ impl Config {
         if let Ok(value) = var("AV1WC_SVTAV1_PARAMS") {
             self.encoding.svtav1_params = value;
         }
+        if let Ok(value) = var("AV1WC_KEYINT_SECONDS") {
+            if let Ok(parsed) = value.parse::<f64>() {
+                self.encoding.keyint_seconds = parsed;
+            }
+        }
         if let Ok(value) = var("AV1WC_PROGRESS_INTERVAL") {
             if let Ok(parsed) = value.parse() {
                 self.encoding.progress_interval = parsed;
@@ -647,6 +678,46 @@ mod tests {
         assert!(params.validate().is_err());
         params.vmaf_segment_duration_seconds = 301.0;
         assert!(params.validate().is_err());
+    }
+
+    #[test]
+    fn il_gop_dura_dieci_secondi_a_ogni_frame_rate() {
+        let params = EncodingParams::default();
+        assert_eq!(params.keyint_seconds, 10.0);
+        assert_eq!(params.effective_keyint(Some((24000, 1001))), 240);
+        assert_eq!(params.effective_keyint(Some((25, 1))), 250);
+        assert_eq!(params.effective_keyint(Some((30000, 1001))), 300);
+        assert_eq!(params.effective_keyint(Some((50, 1))), 500);
+        assert_eq!(params.effective_keyint(Some((60000, 1001))), 599);
+    }
+
+    #[test]
+    fn senza_frame_rate_affidabile_il_gop_torna_a_keyint() {
+        let params = EncodingParams::default();
+        assert_eq!(params.effective_keyint(None), 240);
+        assert_eq!(params.effective_keyint(Some((90000, 1))), 240);
+        let fisso = EncodingParams {
+            keyint_seconds: 0.0,
+            keyint: 120,
+            ..Default::default()
+        };
+        assert_eq!(fisso.effective_keyint(Some((60, 1))), 120);
+    }
+
+    #[test]
+    fn keyint_seconds_fuori_intervallo_e_rifiutato() {
+        for value in [-1.0, 60.5, f64::NAN] {
+            let params = EncodingParams {
+                keyint_seconds: value,
+                ..Default::default()
+            };
+            assert!(params.validate().is_err(), "accettato: {value}");
+        }
+        let params = EncodingParams {
+            keyint_seconds: 0.0,
+            ..Default::default()
+        };
+        assert!(params.validate().is_ok());
     }
 
     #[test]

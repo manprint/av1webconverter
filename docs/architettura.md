@@ -29,7 +29,8 @@ Riproduce `start_av1_docker.sh`, senza la parte SSH:
 1. **`ffprobe`** → durata e `avg_frame_rate`, da cui i frame stimati. Un sorgente
    senza durata valida o senza stream video fallisce subito.
 2. **Codifica** in Matroska temporaneo con `libsvtav1`:
-   `-b:v 0 -crf N -preset P -svtav1-params ... -g 240 -pix_fmt yuv420p10le`,
+   `-b:v 0 -crf N -preset P -svtav1-params ... -g G -pix_fmt yuv420p10le`,
+   con `G = round(fps × keyint_seconds)`, cioè 10 s di GOP a ogni frame rate,
    audio `libopus` dopo il downmix `aformat=channel_layouts=mono|stereo`, filtro
    `scale=-2:trunc(min(H\,ih)/2)*2:reset_sar=1`.
    In modalità `target_size` due passaggi (`-pass 1` / `-pass 2`) con `-b:v`

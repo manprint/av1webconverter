@@ -123,8 +123,14 @@
                 <input id="param-pixel-format" name="pixel_format" type="text" placeholder="yuv420p10le" />
               </div>
               <div class="field">
+                <label for="param-keyint-seconds">Keyframe ogni (secondi)</label>
+                <input id="param-keyint-seconds" name="keyint_seconds" type="number" min="0" max="60" step="0.5" />
+                <small>Convertiti in frame dal frame rate del sorgente; 0 usa il valore in frame.</small>
+              </div>
+              <div class="field">
                 <label for="param-keyint">Keyframe ogni (frame)</label>
                 <input id="param-keyint" name="keyint" type="number" min="1" max="3000" />
+                <small>Usato con 0 secondi o frame rate non rilevabile.</small>
               </div>
               <div class="field">
                 <label for="param-cpus">Thread ffmpeg</label>

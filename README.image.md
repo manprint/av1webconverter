@@ -102,4 +102,7 @@ di misura usa `model=version=vmaf_v1.0.16_5d0h`.
 
 Le opzioni `SCALE_HEIGHT`, `PRESET`, `CRF`, `AUDIO_BITRATE`, `LOCAL_CPUS`,
 `PROGRESS_INTERVAL`, `OUTPUT_DIR`, `OVERWRITE` e `FFMPEG_IMAGE` funzionano come
-nelle varianti documentate sopra.
+nelle varianti documentate sopra. `KEYINT_SECONDS` (default 10) fissa la
+distanza fra keyframe in secondi: lo script la converte in frame dal frame rate
+del sorgente, quindi `-g 600` a 60 fps e `-g 240` a 23.976; con `0` o un frame
+rate non leggibile resta `-g 240`.

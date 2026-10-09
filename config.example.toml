@@ -73,7 +73,11 @@ audio_bitrate = "48k"       # AV1WC_AUDIO_BITRATE — per traccia Opus, ridotta 
 svtav1_params = "tune=5"    # AV1WC_SVTAV1_PARAMS
 
 pixel_format = "yuv420p10le"
-keyint = 240                # distanza massima fra keyframe (-g)
+# Distanza fra keyframe in secondi: -g = round(fps × valore), quindi 600 frame
+# a 60 fps e 240 a 23.976. 0 usa keyint; keyint vale anche se il frame rate
+# del sorgente non è rilevabile.
+keyint_seconds = 10.0       # AV1WC_KEYINT_SECONDS
+keyint = 240                # distanza fissa fra keyframe in frame (-g)
 # cpus = 4                  # thread concessi a ffmpeg; se omesso decide ffmpeg
 progress_interval = 5.0     # AV1WC_PROGRESS_INTERVAL — aggiornamento del progresso, in secondi
 # Aggiunto al nome dell'output prima di .mp4; il frontend può cambiarlo per job.

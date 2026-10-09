@@ -240,6 +240,21 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
         ),
     )
     .await;
+    let gop = params.effective_keyint(info.frame_rate);
+    log_line(
+        state,
+        job_id,
+        file_id,
+        &match info.frame_rate {
+            Some((numerator, denominator)) => format!(
+                "Keyframe ogni {gop} fotogrammi ({:.1} s a {:.3} fps)",
+                f64::from(gop) * denominator as f64 / numerator as f64,
+                numerator as f64 / denominator as f64
+            ),
+            None => format!("Keyframe ogni {gop} fotogrammi (frame rate non rilevato)"),
+        },
+    )
+    .await;
 
     let temp_dir = state.temp_dir();
     tokio::fs::create_dir_all(&temp_dir)
@@ -316,7 +331,7 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
         };
         let args = match params_codifica.mode {
             EncodingMode::Crf | EncodingMode::VmafAnalysis => {
-                build_crf_args(&params_codifica, &input_path, &temp_mkv)
+                build_crf_args(&params_codifica, &info, &input_path, &temp_mkv)
             }
             EncodingMode::TargetSize => {
                 let bitrate = compute_video_bitrate(&params_codifica, &info)?;
@@ -335,6 +350,7 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
                 }
                 build_two_pass_args(
                     &params_codifica,
+                    &info,
                     &input_path,
                     &temp_mkv,
                     &passlog,
@@ -722,6 +738,7 @@ async fn analizza_file(
             passo += 1;
             let probe_request = SondaRequest {
                 params,
+                info,
                 input: input_path,
                 output_mkv: sonda_mkv,
                 segmento,

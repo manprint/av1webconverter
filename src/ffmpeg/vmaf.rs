@@ -7,6 +7,7 @@ use anyhow::{bail, Result};
 
 use crate::config::EncodingParams;
 use crate::ffmpeg::encode::video_encoder_args;
+use crate::ffmpeg::probe::MediaInfo;
 use crate::models::{MotivoScelta, RisultatoCrf, VmafAnalysis};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -73,6 +74,9 @@ pub fn crf_da_testare(crf_di_partenza: u8, step: u32) -> Vec<u8> {
 
 pub struct SondaRequest<'a> {
     pub params: &'a EncodingParams,
+    /// Sorgente sondato: serve al GOP, che deve restare quello della codifica
+    /// finale.
+    pub info: &'a MediaInfo,
     pub input: &'a Path,
     pub output_mkv: &'a Path,
     pub segmento: &'a SegmentoAnalisi,
@@ -103,7 +107,7 @@ pub fn build_probe_args(request: &SondaRequest<'_>) -> Vec<OsString> {
         "0:v:0".into(),
         "-an".into(),
     ];
-    args.extend(video_encoder_args(request.params));
+    args.extend(video_encoder_args(request.params, request.info));
     args.extend([
         "-b:v".into(),
         "0".into(),
@@ -443,6 +447,15 @@ mod tests {
     fn probe_request() -> SondaRequest<'static> {
         SondaRequest {
             params: Box::leak(Box::new(EncodingParams::default())),
+            info: Box::leak(Box::new(MediaInfo {
+                duration_seconds: 600.0,
+                frame_rate: Some((60, 1)),
+                estimated_frames: 36_000,
+                audio_streams: 1,
+                source_audio_bitrate_bps: None,
+                width: Some(1920),
+                height: Some(1080),
+            })),
             input: Path::new("source.mp4"),
             output_mkv: Path::new("probe.mkv"),
             segmento: Box::leak(Box::new(SegmentoAnalisi {
@@ -467,6 +480,10 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair == [OsString::from("-crf"), OsString::from("44")]));
+        // Stesso GOP della codifica finale: 10 s a 60 fps.
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == [OsString::from("-g"), OsString::from("600")]));
         assert_eq!(args.last().unwrap(), "probe.mkv");
         assert!(args.contains(&OsString::from("-vf")));
     }

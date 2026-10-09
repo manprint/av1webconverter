@@ -92,6 +92,7 @@ const PARAM_FIELDS = [
     modes: ["crf", "vmaf_analysis"],
   },
   { key: "pixel_format", label: "Formato pixel", type: "text" },
+  { key: "keyint_seconds", label: "Keyframe ogni (secondi)", type: "number", min: 0, max: 60, step: 0.5 },
   { key: "keyint", label: "Keyframe ogni (frame)", type: "number", min: 1, max: 3000 },
   { key: "cpus", label: "Thread ffmpeg", type: "number", min: 1, max: 256, placeholder: "automatico" },
   { key: "progress_interval", label: "Aggiornamento progresso (s)", type: "number", min: 0.5, step: 0.5 },

@@ -697,6 +697,59 @@ async fn un_audio_ac3_5_1_diventa_opus_stereo() {
 }
 
 #[tokio::test]
+async fn il_gop_dura_dieci_secondi_al_frame_rate_del_sorgente() {
+    if !common::ffmpeg_with_svtav1() {
+        eprintln!("ffmpeg con SVT-AV1 non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("trenta.mp4");
+    common::make_test_video_at(&source, 25, 30);
+
+    let job: serde_json::Value = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({ "name": "gop" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    assert_eq!(job["params"]["keyint_seconds"], 10.0);
+    let uploaded = upload_file(&server, &job_id, "trenta.mp4", &source).await;
+    let file_id = uploaded["job"]["files"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/start")))
+        .send()
+        .await
+        .unwrap();
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "{job}");
+
+    // 30 fps × 10 s = 300 frame: con i 240 frame fissi di prima i keyframe
+    // cadrebbero a 0, 8, 16 e 24 s.
+    let log = file_log_text(&server, &job_id, &file_id).await;
+    assert!(log.contains("Keyframe ogni 300 fotogrammi"), "{log}");
+    let output_path = server.output_dir.join(&job_id).join("trenta_av1.mp4");
+    let keyframes = common::keyframe_times(&output_path);
+    assert_eq!(keyframes.len(), 3, "keyframe inattesi: {keyframes:?}");
+    for (time, expected) in keyframes.iter().zip([0.0, 10.0, 20.0]) {
+        assert!(
+            (time - expected).abs() < 0.05,
+            "keyframe a {time} s invece di {expected} s: {keyframes:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn un_sorgente_non_valido_fa_fallire_solo_il_suo_file() {
     if !common::ffmpeg_with_svtav1() {
         eprintln!("ffmpeg con SVT-AV1 e reset_sar non disponibile: test saltato");

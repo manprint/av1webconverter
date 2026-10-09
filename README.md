@@ -151,6 +151,7 @@ poter configurare il container senza montare un TOML. Le più usate:
 | `AV1WC_PRESET`             | preset SVT-AV1 di default                          |
 | `AV1WC_SCALE_HEIGHT`       | altezza massima dell'output; `0` = dimensione originale |
 | `AV1WC_SVTAV1_PARAMS`      | `-svtav1-params` di default                        |
+| `AV1WC_KEYINT_SECONDS`     | GOP in secondi, convertito in frame dal frame rate del sorgente; `0` = `keyint` fisso |
 | `AV1WC_MEASURE_VMAF`       | abilita la misura VMAF (`true`/`false`)            |
 | `AV1WC_VMAF_MODEL`         | modello VMAF di default                           |
 | `AV1WC_VMAF_SEGMENTS`      | segmenti analizzati in modalità VMAF              |
@@ -189,6 +190,12 @@ Default rilevanti, ereditati dalle misure documentate in `README.image.md`:
   VBR a due passaggi.
   `tune=5` richiede inoltre SVT-AV1 4.x, quello dell'immagine custom.
 - `enable-qm=1:qm-min=0` resta escluso: nei test riduceva sia SSIM sia PSNR.
+- `keyint_seconds = 10`: un keyframe ogni 10 secondi, convertiti in frame dal
+  frame rate del sorgente (`-g 600` a 60 fps, `-g 240` a 23,976 fps). Un GOP più
+  corto spende bit senza migliorare la qualità: a parità di CRF un GOP da 4 s
+  ingrandiva il file dal 4 al 34%. Con `0` vale il valore fisso `keyint` (240
+  frame), usato anche quando il frame rate non è rilevabile. Un `keyint=` dentro
+  `svtav1_params` ha la precedenza su entrambi.
 - Il ridimensionamento limita l'altezza a `scale_height` mantenendo l'aspetto
   visivo del sorgente e normalizzando a pixel quadrati (SAR 1:1), per evitare DAR
   errati con sorgenti anamorfiche. Con `scale_height = 0` non viene applicato

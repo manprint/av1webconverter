@@ -129,6 +129,9 @@ services:
       # Parametri passati a -svtav1-params. Default tune=5 per CRF; in modalità
       # target_size l'applicazione forza tune=0. Ammessi token separati da ':'.
       AV1WC_SVTAV1_PARAMS: "${AV1WC_SVTAV1_PARAMS:-tune=5}"
+      # Distanza fra keyframe in secondi, convertita in frame dal frame rate del
+      # sorgente (600 a 60 fps, 240 a 23.976). 0 = 240 frame fissi.
+      AV1WC_KEYINT_SECONDS: "${AV1WC_KEYINT_SECONDS:-10}"
       # Intervallo degli aggiornamenti di progresso, secondi > 0 anche decimali.
       AV1WC_PROGRESS_INTERVAL: "${AV1WC_PROGRESS_INTERVAL:-5.0}"
       # Misura VMAF opzionale sull'output definitivo; default disattivata.

@@ -11,6 +11,8 @@ local_cpus="${LOCAL_CPUS:-4}"
 remote_cpus="${REMOTE_CPUS:-6}"
 svtav1_params="${SVTAV1_PARAMS:-tune=5}"
 progress_interval="${PROGRESS_INTERVAL:-5}"
+# Distanza fra keyframe in secondi; 0 = 240 fotogrammi fissi.
+keyint_seconds="${KEYINT_SECONDS:-10}"
 
 remote_user="${REMOTE_USER:-ubuntu}"
 remote_host="${REMOTE_HOST:-212.227.88.91}"
@@ -155,6 +157,11 @@ if ! awk -v value="$progress_interval" \
     printf 'Errore: PROGRESS_INTERVAL deve essere un numero maggiore di zero.\n' >&2
     exit 2
 fi
+if ! awk -v value="$keyint_seconds" \
+        'BEGIN { exit !(value ~ /^[0-9]+([.][0-9]+)?$/ && value <= 60) }'; then
+    printf 'Errore: KEYINT_SECONDS deve essere un numero fra 0 e 60.\n' >&2
+    exit 2
+fi
 
 duration=$(
     ffprobe -v error \
@@ -181,6 +188,23 @@ estimated_frames=$(
                 printf "%.0f", duration * parts[1] / parts[2]
             else
                 print 0
+        }
+    '
+)
+# GOP di KEYINT_SECONDS secondi al frame rate del sorgente, come l'applicazione:
+# 240 fotogrammi fissi sarebbero 10 s a 24 fps ma solo 4 s a 60 fps. Senza frame
+# rate plausibile, o con KEYINT_SECONDS=0, restano 240 fotogrammi.
+keyint=$(
+    awk -v rate="$video_frame_rate" -v seconds="$keyint_seconds" '
+        BEGIN {
+            split(rate, parts, "/")
+            fps = (parts[1] > 0 && parts[2] > 0) ? parts[1] / parts[2] : 0
+            if (seconds > 0 && fps >= 1 && fps <= 1000) {
+                gop = int(fps * seconds + 0.5)
+                print (gop < 1 ? 1 : gop)
+            } else {
+                print 240
+            }
         }
     '
 )
@@ -229,7 +253,7 @@ remote_ffmpeg=(
     -vf "scale=-2:trunc(min(${scale_height}\\,ih)/2)*2:reset_sar=1"
     -b:v 0 -crf "$crf" -preset "$preset"
     -svtav1-params "$svtav1_params"
-    -g 240 -pix_fmt yuv420p10le
+    -g "$keyint" -pix_fmt yuv420p10le
     # Downmix stereo: libopus rifiuta il 5.1(side) di AC3, E-AC3 e DTS.
     -af 'aformat=channel_layouts=mono|stereo'
     -c:a libopus -b:a "$audio_bitrate"
