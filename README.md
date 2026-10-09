@@ -10,6 +10,7 @@ parte SSH: ffmpeg viene eseguito nello stesso container del servizio.
 
 - **Documentazione API**: [docs/api.md](docs/api.md)
 - **Architettura**: [docs/architettura.md](docs/architettura.md)
+- **Qualità di codifica**: [docs/qualita-codifica.md](docs/qualita-codifica.md)
 - **Immagine ffmpeg**: [README.image.md](README.image.md)
 
 ## Funzionalità
@@ -180,7 +181,8 @@ conversione il CRF più alto che mantiene il VMAF medio almeno pari a
 soglia viene usato il CRF impostato. Fuori da questa modalità non vengono eseguite
 sonde aggiuntive.
 
-Default rilevanti, ereditati dalle misure documentate in `README.image.md`:
+Default rilevanti, ereditati dalle misure documentate in `README.image.md` e in
+[docs/qualita-codifica.md](docs/qualita-codifica.md):
 
 - `svtav1_params = "tune=5"`, ottimizzato per la qualità percettiva VMAF (95,076
   contro 92,810 di `tune=0` a pari bitrate). `tune=0` conserva un PSNR superiore
@@ -190,6 +192,15 @@ Default rilevanti, ereditati dalle misure documentate in `README.image.md`:
   VBR a due passaggi.
   `tune=5` richiede inoltre SVT-AV1 4.x, quello dell'immagine custom.
 - `enable-qm=1:qm-min=0` resta escluso: nei test riduceva sia SSIM sia PSNR.
+- Restano escluse anche `enable-variance-boost=1` e le altre opzioni
+  psicovisive di SVT-AV1 4.2 (`qp-scale-compress-strength`, `tf-strength`,
+  `ac-bias`, `sharpness`): a parità di CRF ingrandivano il file dal 43 al 56%, e
+  a parità di dimensione perdevano su VMAF più di quanto guadagnassero su XPSNR.
+- `film-grain=8` non è un default ma si può impostare per job
+  (`svtav1_params = "tune=5:film-grain=8"`) su sorgenti con banding evidente,
+  come cieli, gradienti e scene scure: nelle misure elimina il banding al costo
+  di circa il 19% di file in più, fino al 41% su una scena statica. In modalità
+  `target_size` non ha effetto, perché i parametri diventano `tune=0`.
 - `keyint_seconds = 10`: un keyframe ogni 10 secondi, convertiti in frame dal
   frame rate del sorgente (`-g 600` a 60 fps, `-g 240` a 23,976 fps). Un GOP più
   corto spende bit senza migliorare la qualità: a parità di CRF un GOP da 4 s

@@ -40,6 +40,8 @@ Riproduce `start_av1_docker.sh`, senza la parte SSH:
    dei due rami prima di libvmaf.
    In modalità `target_size` due passaggi (`-pass 1` / `-pass 2`) con `-b:v`
    calcolato dal target.
+   Le misure dietro queste scelte (GOP, downmix, tag colore, opzioni di SVT-AV1
+   escluse) sono in [qualita-codifica.md](qualita-codifica.md).
 3. **Remux** in MP4 senza ricodifica: `-c copy -tag:v av01 -movflags +faststart`.
 4. **Rinomina atomica** del temporaneo nella cartella di output: il file finale
    compare solo quando è completo e valido.
@@ -133,5 +135,6 @@ tema chiaro/scuro via `prefers-color-scheme`.
 - **End-to-end** (`cargo test --test e2e_conversion`): conversioni reali con
   ffmpeg, dall'upload al download — CRF, dimensione target, sequenzialità con
   `concurrency = 1`, stop a metà codifica, salto dell'output esistente,
-  fallimento isolato di un sorgente non valido. Se manca un ffmpeg con
-  `libsvtav1` i test si autoescludono con un messaggio.
+  fallimento isolato di un sorgente non valido, downmix di un AC3 5.1, GOP di
+  10 s a 60 fps, tag BT.709 su un HD senza tag, modello VMAF HFR a 60 fps. Se
+  manca un ffmpeg con `libsvtav1` i test si autoescludono con un messaggio.

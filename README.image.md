@@ -79,6 +79,13 @@ superiore (46,314 contro 45,998 dB) e può essere selezionato con
 Le vecchie opzioni `enable-qm=1:qm-min=0` restano escluse perché nei test
 hanno ridotto sia SSIM sia PSNR.
 
+Le misure su SVT-AV1 4.2.0 che hanno fissato gli altri default (variance boost,
+grana sintetica, GOP in secondi, modelli VMAF ad alto frame rate) sono raccolte
+in [docs/qualita-codifica.md](docs/qualita-codifica.md). Su sorgenti con banding
+evidente, come cieli, gradienti e scene scure, la grana sintetica si attiva con
+`SVTAV1_PARAMS=tune=5:film-grain=8`: elimina il banding al costo di circa il
+19% di file in più.
+
 ## Parametri non gestiti dagli script
 
 Gli script presenti in questo repository gestiscono la modalità CRF. La

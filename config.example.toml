@@ -70,6 +70,8 @@ audio_bitrate = "48k"       # AV1WC_AUDIO_BITRATE — per traccia Opus, ridotta 
 # tune=5 è ottimizzato per la qualità percettiva VMAF ed è il default.
 # Richiede SVT-AV1 4.x (quello dell'immagine custom) ed è accettato solo in CRF:
 # in modalità target_size viene forzato automaticamente tune=0.
+# Contro il banding (cieli, gradienti, scene scure) si può usare per job
+# "tune=5:film-grain=8": circa +19% di file. Misure in docs/qualita-codifica.md.
 svtav1_params = "tune=5"    # AV1WC_SVTAV1_PARAMS
 
 pixel_format = "yuv420p10le"
