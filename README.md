@@ -195,7 +195,8 @@ Default rilevanti, ereditati dalle misure documentate in `README.image.md` e in
 - Restano escluse anche `enable-variance-boost=1` e le altre opzioni
   psicovisive di SVT-AV1 4.2 (`qp-scale-compress-strength`, `tf-strength`,
   `ac-bias`, `sharpness`): a parità di CRF ingrandivano il file dal 43 al 56%, e
-  a parità di dimensione perdevano su VMAF più di quanto guadagnassero su XPSNR.
+  a parità di dimensione guadagnavano solo su XPSNR: SSIMULACRA2 restava in
+  pari e VMAF perdeva dal 4 al 16%.
 - `film-grain=8` non è un default ma si può impostare per job
   (`svtav1_params = "tune=5:film-grain=8"`) su sorgenti con banding evidente,
   come cieli, gradienti e scene scure: nelle misure elimina il banding al costo

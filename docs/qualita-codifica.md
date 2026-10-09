@@ -9,9 +9,9 @@ accettata solo se la qualità che aggiunge vale più dei byte che costa.
 
 | Opzione | Esito | Motivo |
 | ------- | ----- | ------ |
-| `tune=5` | resta il default | `tune=0` riduce il file solo dell'1,9% a parità di CRF e perde il 6–8% su VMAF-NEG e VMAF v1 |
-| `enable-variance-boost=1` | escluso | +46–56% di file a parità di CRF; a parità di dimensione guadagna su XPSNR ma perde di più su VMAF |
-| `qp-scale-compress-strength`, `tf-strength`, `ac-bias`, `sharpness` | esclusi | BD-rate su VMAF peggiore del 14–18% |
+| `tune=5` | resta il default | `tune=0` riduce il file solo dell'1,9% a parità di CRF e perde il 6–8,5% su VMAF-NEG e VMAF v1 |
+| `enable-variance-boost=1` | escluso | +46–56% di file a parità di CRF; a parità di dimensione guadagna solo su XPSNR, resta in pari su SSIMULACRA2 e perde su VMAF |
+| `qp-scale-compress-strength`, `tf-strength`, `ac-bias`, `sharpness` | esclusi | BD-rate su VMAF peggiore del 13–19% |
 | `enable-qm=1` | resta escluso | non sposta i risultati; le misure precedenti mostravano SSIM e PSNR in calo |
 | GOP di 10 s a ogni frame rate (`keyint_seconds`) | adottato | un GOP da 4 s, quello di un sorgente a 60 fps con `keyint = 240`, costa il 14% di file e peggiora la qualità |
 | `film-grain=8` | opzione per job | elimina il banding (CAMBI medio da 1,09 a 0,01) ma costa il 19% di file, il 41% su una scena statica |
@@ -72,6 +72,16 @@ e libvmaf 3.2.0: lo stesso encoder dell'immagine attuale.
 Il VMAF v0.6.1 classico non è usato nei confronti, perché premia sharpening e
 contrasto.
 
+Due dettagli cambiano i numeri. Il Matroska arrotonda i timestamp al
+millisecondo e a 24 fps un frame su tre cade appena prima del suo gemello nel
+`.y4m`: con la sincronizzazione di default FFmpeg lo confronta con il frame
+precedente, e il VMAF-NEG di `tos` a CRF 47 scende da 90,1 a 75,2. VMAF usa
+quindi `ts_sync_mode=nearest`, mentre XPSNR e SSIMULACRA2 leggono il distorto
+decodificato in `.y4m` e confrontano i frame per indice. Il filtro `xpsnr`
+calcola inoltre i pesi dall'attività del primo input, che deve essere il
+riferimento; libvmaf vuole invece per primo il distorto. Con gli input
+invertiti la grana sintetica guadagna 0,7 dB di XPSNR invece di perderne 1,2.
+
 ### Lettura dei risultati
 
 Per ogni configurazione e clip la curva qualità/bitrate è interpolata (PCHIP sul
@@ -100,53 +110,56 @@ differenza assoluta (negativo = meno banding).
 
 | Config | Dimensione | SSIMULACRA2 | XPSNR | VMAF-NEG | VMAF v1 | CAMBI |
 | ------ | ---------: | ----------: | ----: | -------: | ------: | ----: |
-| `t0` | −1,9% | −0,8% | −2,8% | −6,9% | −7,7% | −0,07 |
-| `t0vb` | +55,9% | +51,8% | +50,3%¹ | +36,4% | +20,9%¹ | −0,13 |
-| `t5vb` | +46,3% | +48,1% | +52,2% | +39,8% | +39,8% | −0,04 |
-| `t0psy` | +42,9% | +37,7% | +46,8% | +20,6% | +20,4% | −0,13 |
-| `t0psyac` | +46,5% | +40,0% | +45,2%¹ | +25,6% | +28,2% | −0,25 |
-| `t0psyqm` | +46,0% | +40,8% | +53,9% | +25,5% | +28,9% | −0,25 |
-| `t5fg8` | +19,3% | −1,4% | +34,7% | −0,3% | +9,9% | −1,08 |
-| `t5g96` | +14,2% | −4,0% | −6,8% | −3,1% | −2,4% | +0,01 |
+| `t0` | −1,9% | −0,8% | −1,7% | −6,1% | −8,5% | −0,07 |
+| `t0vb` | +55,9% | +51,8% | +54,5%¹ | +38,3% | +37,2% | −0,13 |
+| `t5vb` | +46,3% | +48,1% | +54,2% | +39,8% | +39,5% | −0,04 |
+| `t0psy` | +42,9% | +37,7% | +38,2%¹ | +22,6% | +20,0% | −0,12 |
+| `t0psyac` | +46,5% | +40,0% | +39,9%¹ | +27,9% | +27,5% | −0,24 |
+| `t0psyqm` | +46,0% | +40,8% | +39,9%¹ | +27,7% | +28,2% | −0,24 |
+| `t5fg8` | +19,3% | −1,4% | −24,4% | −0,4% | +8,1% | −1,07 |
+| `t5g96` | +14,2% | −4,0% | −6,0% | −3,3% | −2,7% | +0,01 |
 
-¹ Media di `tos` e `dark`: su `snow` la qualità supera quella del punto più
-alto misurato per `tune=5` (CRF 35).
+¹ Media di `tos` e `dark`, dove il file cresce del 42% (`t0vb`), 29%
+(`t0psy`), 33% (`t0psyac`) e 32% (`t0psyqm`): su `snow` la qualità supera
+quella del punto più alto misurato per `tune=5` (CRF 35).
 
-Con il variance boost il valore supera l'aumento di dimensione solo su XPSNR
-(`t5vb`, `t0psy`, `t0psyqm`) e su SSIMULACRA2 (`t5vb`), di pochi punti, mai su
-VMAF-NEG e VMAF v1. Sulla scena statica `snow` il file cresce dal 70 all'84%.
+Con il variance boost il valore supera l'aumento di dimensione su XPSNR, con
+ogni variante, e su SSIMULACRA2 solo con `t5vb`, di 2 punti; mai su VMAF-NEG e
+VMAF v1. Sulla scena statica `snow` il file cresce dal 70 all'84%.
 
 ### A parità di dimensione
 
 | Config | CRF | SSIMULACRA2 | SSIMULACRA2 p10 | XPSNR | VMAF-NEG | VMAF v1 | CAMBI |
 | ------ | --: | ----------: | --------------: | ----: | -------: | ------: | ----: |
-| `t0` | 46,6 | +1,1% | −0,2% | −1,0% | −5,1% | −5,8% | −0,07 |
-| `t0vb` | 55,1 | +1,3% | −0,8% | +10,6% | −10,7% | −12,7% | −0,12 |
-| `t5vb` | 54,4 | +3,2% | +0,9% | +7,7% | −4,1% | −5,6% | −0,02 |
-| `t0psy` | 53,6 | +0,2% | −0,4% | +7,8% | −12,9% | −15,0% | −0,13 |
-| `t0psyac` | 54,0 | −0,3% | −0,9% | +11,2% | −12,1% | −15,0% | −0,20 |
-| `t0psyqm` | 54,0 | +0,1% | +0,2% | +10,8% | −11,7% | −14,8% | −0,20 |
+| `t0` | 46,6 | +1,1% | −0,2% | +0,3% | −4,3% | −6,7% | −0,07 |
+| `t0vb` | 55,1 | +1,3% | −0,8% | +14,1% | −10,1% | −13,4% | −0,12 |
+| `t5vb` | 54,4 | +3,2% | +0,9% | +8,6% | −4,4% | −5,9% | −0,02 |
+| `t0psy` | 53,6 | +0,2% | −0,4% | +10,7% | −12,3% | −15,6% | −0,13 |
+| `t0psyac` | 54,0 | −0,3% | −0,9% | +10,2% | −11,4% | −15,3% | −0,19 |
+| `t0psyqm` | 54,0 | +0,1% | +0,2% | +9,8% | −11,0% | −15,2% | −0,20 |
 
-A pari byte le varianti con variance boost guadagnano su XPSNR (+8–11%) ma
-perdono di più su VMAF-NEG e VMAF v1 (dal 4 al 15%), mentre SSIMULACRA2 resta
-entro il 3%. `t5vb` è la più vicina al pareggio, ma su `snow` perde su tutte le
-metriche. Per arrivare a quella dimensione servirebbe inoltre un CRF di 53–55 al
-posto di 47.
+A pari byte le varianti con variance boost guadagnano su XPSNR (+9–14%),
+restano in pari su SSIMULACRA2 (fra −0,3 e +3,2%) e perdono su VMAF-NEG e
+VMAF v1 (dal 4 al 16%). XPSNR pesa di più l'errore nelle zone piatte, proprio
+quelle a cui il variance boost sposta i bit; le altre due metriche non vedono lo
+stesso guadagno. `t5vb` è la più vicina al pareggio, ma su `snow` perde su tutte
+le metriche. Per arrivare a quella dimensione servirebbe inoltre un CRF di 53–55
+al posto di 47.
 
 ### BD-rate rispetto a `tune=5`
 
 | Config | SSIMULACRA2 | XPSNR | VMAF-NEG | VMAF v1 |
 | ------ | ----------: | ----: | -------: | ------: |
-| `t0` | −0,5% | +0,4% | +5,7% | +6,3% |
-| `t0vb` | −0,2% | −8,9% | +13,1% | +14,3% |
-| `t5vb` | −2,4% | −6,1% | +4,4% | +6,1% |
-| `t0psy` | +0,9% | −6,6% | +16,3% | +18,0% |
-| `t0psyac` | +1,5% | −9,5% | +15,0% | +17,0% |
-| `t0psyqm` | +1,2% | −9,4% | +14,4% | +16,3% |
+| `t0` | −0,5% | −1,1% | +4,5% | +7,0% |
+| `t0vb` | −0,2% | −11,6% | +12,0% | +15,6% |
+| `t5vb` | −2,4% | −7,6% | +4,6% | +6,3% |
+| `t0psy` | +0,9% | −9,0% | +15,0% | +18,8% |
+| `t0psyac` | +1,5% | −8,2% | +13,6% | +17,7% |
+| `t0psyqm` | +1,2% | −8,4% | +13,0% | +17,0% |
 
-`tune=0` è in pari su SSIMULACRA2 e XPSNR ma chiede il 6% di bitrate in più a
-pari VMAF: `tune=5` resta il default. Le varianti con variance boost risparmiano
-il 6–10% a pari XPSNR e lo pagano con il 4–18% in più a pari VMAF. Fra
+`tune=0` è in pari su SSIMULACRA2 e XPSNR ma chiede dal 4,5 al 7% di bitrate in
+più a pari VMAF: `tune=5` resta il default. Le varianti con variance boost
+risparmiano l'8–12% a pari XPSNR e lo pagano con il 5–19% in più a pari VMAF. Fra
 `t0psyac` e `t0psyqm` le differenze restano sotto il punto percentuale:
 `enable-qm=1` non cambia l'esito.
 
@@ -204,10 +217,10 @@ converte uno dei due rami prima di libvmaf, e il punteggio crolla. Test su un
 
 | Output | Riferimento senza tag | Riferimento con tag BT.709 |
 | ------ | --------------------: | -------------------------: |
-| 480p senza tag | 67,64 | — |
-| 480p con tag | 34,05 | 67,64 |
-| 720p senza tag | 66,47 | 48,58 |
-| 720p con tag | 39,24 | 66,47 |
+| 480p senza tag | 94,38 | — |
+| 480p con tag | 51,61 | 94,38 |
+| 720p senza tag | 91,60 | 69,12 |
+| 720p con tag | 57,78 | 91,60 |
 
 Con tag uguali il punteggio coincide con quello senza tag, prima o dopo lo
 `scale` del riferimento. La misura VMAF e le sonde di `vmaf_analysis` applicano
@@ -241,15 +254,16 @@ al decoder in riproduzione; SVT-AV1 4.2 usa per default `film-grain-denoise=0` e
 
 | Clip | Bitrate | CAMBI medio (max) | SSIMULACRA2 | VMAF v1 |
 | ---- | ------- | ----------------- | ----------- | ------- |
-| `tos` | 289 → 308 kbit/s (+6,5%) | 0,27 (0,38) → 0,00 (0,00) | 60,4 → 60,1 | 78,0 → 78,1 |
-| `snow` | 38 → 53 kbit/s (+40,8%) | 1,62 (6,86) → 0,04 (0,28) | 81,0 → 80,8 | 92,3 → 93,0 |
-| `dark` | 193 → 213 kbit/s (+10,5%) | 1,38 (2,62) → 0,00 (0,29) | 66,4 → 66,2 | 65,6 → 65,7 |
+| `tos` | 289 → 308 kbit/s (+6,5%) | 0,27 (0,38) → 0,00 (0,00) | 60,4 → 60,1 | 94,9 → 95,0 |
+| `snow` | 38 → 53 kbit/s (+40,8%) | 1,60 (6,86) → 0,04 (0,28) | 81,0 → 80,8 | 93,7 → 94,4 |
+| `dark` | 193 → 213 kbit/s (+10,5%) | 1,38 (2,62) → 0,00 (0,29) | 66,4 → 66,2 | 93,0 → 93,1 |
 
-Il banding sparisce su tutte e tre le clip; le altre metriche restano quasi
-ferme (VMAF-NEG invariato, XPSNR +0,65 dB). Come default costa troppo: in media
-il 19% di file, e su una sorgente con poco banding come `tos` il 6,5% in più non
-porta guadagni misurabili sulle altre metriche. Conviene invece per job, su
-sorgenti con cieli, gradienti, scene scure o animazione:
+Il banding sparisce su tutte e tre le clip. SSIMULACRA2 e VMAF restano quasi
+fermi, mentre XPSNR cala di 1,2 dB: confronta i pixel, e la grana sintetica non
+coincide con quella del sorgente. Come default costa troppo: in media il 19% di
+file, e su una sorgente con poco banding come `tos` il 6,5% in più non migliora
+né SSIMULACRA2 né VMAF. Conviene invece per job, su sorgenti con cieli,
+gradienti, scene scure o animazione:
 
 ```json
 { "name": "Animazione", "params": { "svtav1_params": "tune=5:film-grain=8" } }
@@ -275,14 +289,19 @@ passaggi.
 Distorto e riferimento devono avere la stessa risoluzione.
 
 ```bash
-# VMAF-NEG, VMAF v1 e CAMBI
+# VMAF-NEG, VMAF v1 e CAMBI: prima il distorto, poi il riferimento
 ffmpeg -i out.mkv -i ref.y4m -lavfi \
-  "[0:v][1:v]libvmaf=model='version=vmaf_v0.6.1neg\:name=vmafneg|version=vmaf_v1.0.16_5d0h\:name=v1':feature='name=cambi':log_fmt=json:log_path=vmaf.json" \
+  "[0:v][1:v]libvmaf=model='version=vmaf_v0.6.1neg\:name=vmafneg|version=vmaf_v1.0.16_5d0h\:name=v1':feature='name=cambi':ts_sync_mode=nearest:log_fmt=json:log_path=vmaf.json" \
   -f null -
 
-# XPSNR per piano, da pesare 6:1:1
-ffmpeg -i out.mkv -i ref.y4m -lavfi "[0:v][1:v]xpsnr" -f null -
+# XPSNR per piano, da pesare 6:1:1: prima il riferimento, poi il distorto
+ffmpeg -v error -i out.mkv -pix_fmt yuv420p10le -strict -1 -f yuv4mpegpipe - |
+  ffmpeg -i ref.y4m -f yuv4mpegpipe -i - -lavfi "[0:v][1:v]xpsnr" -f null -
 ```
 
+Il distorto arriva a `xpsnr` da una pipe `.y4m`: con i frame di libdav1d come
+secondo input il filtro di FFmpeg 9 restituisce valori senza senso (3 dB invece
+di 35).
+
 SSIMULACRA2 è calcolato frame per frame con la crate Rust `ssimulacra2` 0.5 sui
-due `.y4m` a 10 bit.
+due `.y4m` a 10 bit, riferimento per primo.
