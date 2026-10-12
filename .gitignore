@@ -10,6 +10,9 @@
 /data/
 /logs/
 
+# Benchmark locali sull'interpolazione fps (video di confronto, non versionati)
+/tests-fps/
+
 # Sorgenti e conversioni degli script bash di riferimento
 *.mp4
 converted

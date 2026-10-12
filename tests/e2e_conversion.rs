@@ -1043,3 +1043,246 @@ async fn un_target_inarrivabile_ripiega_sul_crf_impostato() {
         "{riga_scelta}"
     );
 }
+
+/// Crea un job con i parametri indicati, carica `source` e lo avvia.
+async fn avvia_job_con_parametri(
+    server: &common::TestServer,
+    source: &std::path::Path,
+    name: &str,
+    params: serde_json::Value,
+) -> (String, String) {
+    let job: serde_json::Value = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({ "name": name, "params": params }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    let uploaded = upload_file(server, &job_id, "sorgente.mp4", source).await;
+    let file_id = uploaded["job"]["files"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let response = server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/start")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    (job_id, file_id)
+}
+
+#[tokio::test]
+async fn interpolazione_alza_la_cadenza_di_una_sorgente_lenta() {
+    if !common::ffmpeg_with_svtav1() {
+        eprintln!("ffmpeg con SVT-AV1 e reset_sar non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("sorgente-10fps.mp4");
+    common::make_test_video_at_rate(&source, 2, 10);
+    let (job_id, file_id) = avvia_job_con_parametri(
+        &server,
+        &source,
+        "interpolazione 50",
+        json!({ "crf": 40, "preset": 8, "scale_height": 120, "fps_target": 50, "cpus": 1 }),
+    )
+    .await;
+
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "job non completato: {job}");
+    assert_eq!(job["files"][0]["progress"]["percent"], 100.0);
+
+    let output = server.output_dir.join(&job_id).join("sorgente_av1.mp4");
+    assert_eq!(common::video_codec(&output), "av1");
+    let fps = common::video_frame_rate(&output);
+    assert!((fps - 50.0).abs() < 0.01, "cadenza in uscita: {fps}");
+
+    let log = file_log_text(&server, &job_id, &file_id).await;
+    assert!(log.contains("Interpolazione fps: 10.000 → 50 fps"), "{log}");
+    assert!(log.contains("frame in uscita stimati 100"), "{log}");
+}
+
+#[tokio::test]
+async fn interpolazione_saltata_se_la_sorgente_e_gia_alla_cadenza() {
+    if !common::ffmpeg_with_svtav1() {
+        eprintln!("ffmpeg con SVT-AV1 e reset_sar non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("sorgente-60fps.mp4");
+    common::make_test_video_at_rate(&source, 2, 60);
+    let (job_id, file_id) = avvia_job_con_parametri(
+        &server,
+        &source,
+        "cadenza gia raggiunta",
+        json!({ "crf": 40, "preset": 8, "scale_height": 120, "fps_target": 50, "cpus": 1 }),
+    )
+    .await;
+
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "job non completato: {job}");
+
+    // Il sorgente è già oltre la cadenza richiesta: nessun filtro, cadenza invariata.
+    let output = server.output_dir.join(&job_id).join("sorgente_av1.mp4");
+    let fps = common::video_frame_rate(&output);
+    assert!((fps - 60.0).abs() < 0.01, "cadenza in uscita: {fps}");
+
+    let log = file_log_text(&server, &job_id, &file_id).await;
+    assert!(log.contains("interpolazione saltata"), "{log}");
+    assert!(!log.contains("Interpolazione fps: "), "{log}");
+}
+
+#[tokio::test]
+async fn la_misura_vmaf_regge_l_interpolazione() {
+    if !common::ffmpeg_with_svtav1() || !common::ffmpeg_with_libvmaf() {
+        eprintln!("ffmpeg con SVT-AV1, reset_sar e libvmaf non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("sorgente-vmaf-10fps.mp4");
+    common::make_test_video_at_rate(&source, 3, 10);
+    // Risoluzione originale: libvmaf 3.2.1 nell'immagine va in crash (SIGSEGV) con
+    // altezze fino a 256 px su questo clip, e la scala non è l'oggetto del test.
+    let (job_id, file_id) = avvia_job_con_parametri(
+        &server,
+        &source,
+        "vmaf con interpolazione",
+        json!({
+            "crf": 40,
+            "preset": 8,
+            "scale_height": 0,
+            "fps_target": 60,
+            "measure_vmaf": true,
+            "cpus": 1
+        }),
+    )
+    .await;
+
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "job non completato: {job}");
+
+    // Il riferimento VMAF è interpolato alla stessa cadenza: il punteggio misura
+    // la perdita di codifica e non lo scarto di cadenza tra i due flussi.
+    let output = server.output_dir.join(&job_id).join("sorgente_av1.mp4");
+    let fps = common::video_frame_rate(&output);
+    assert!((fps - 60.0).abs() < 0.01, "cadenza in uscita: {fps}");
+
+    let vmaf = &job["files"][0]["vmaf"];
+    assert_eq!(vmaf["model"], "vmaf_v1.0.16_5d0h");
+    assert!(vmaf["error"].is_null(), "{vmaf}");
+    let score = vmaf["score"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("punteggio VMAF assente: {job}"));
+    // Verifica di pipeline: la media con riferimento interpolato è ~98 su questo clip.
+    // Il disallineamento di cadenza si vede sul minimo per frame, che qui non
+    // viene esposto.
+    assert!(
+        score > 80.0 && score <= 100.0,
+        "punteggio inatteso: {score}"
+    );
+
+    let log = file_log_text(&server, &job_id, &file_id).await;
+    assert!(log.contains("VMAF"), "{log}");
+    assert!(log.contains("Interpolazione fps: 10.000 → 60 fps"), "{log}");
+}
+
+#[tokio::test]
+async fn analisi_vmaf_con_interpolazione_lascia_le_sonde_alla_cadenza_del_sorgente() {
+    if !common::ffmpeg_with_svtav1() || !common::ffmpeg_with_libvmaf() {
+        eprintln!("ffmpeg con SVT-AV1, reset_sar e libvmaf non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("analisi-interpolata-10fps.mp4");
+    common::make_test_video_at_rate(&source, 3, 10);
+    let (job_id, file_id) = avvia_job_con_parametri(
+        &server,
+        &source,
+        "analisi con interpolazione",
+        json!({
+            "mode": "vmaf_analysis",
+            "crf": 40,
+            "crf_test_steps": 2,
+            "vmaf_segments": 1,
+            "vmaf_target": 50.0,
+            "preset": 12,
+            // Come nel test VMAF: senza scala, le sonde misurano davvero e non cadono
+            // nel crash di libvmaf sulle altezze basse.
+            "scale_height": 0,
+            "fps_target": 60,
+            "cpus": 1
+        }),
+    )
+    .await;
+
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(600)).await;
+    assert_eq!(job["status"], "completed", "job non completato: {job}");
+    let analisi = &job["files"][0]["vmaf_analysis"];
+    assert!(analisi.is_object(), "{job}");
+    assert_ne!(analisi["motivo"], "analisi_non_eseguibile", "{job}");
+
+    // La codifica finale è a 60 fps, le sonde restano alla cadenza del sorgente.
+    let output = server.output_dir.join(&job_id).join("sorgente_av1.mp4");
+    let fps = common::video_frame_rate(&output);
+    assert!((fps - 60.0).abs() < 0.01, "cadenza in uscita: {fps}");
+
+    let log = file_log_text(&server, &job_id, &file_id).await;
+    assert!(
+        log.contains("Analisi VMAF: le sonde restano alla cadenza del sorgente"),
+        "{log}"
+    );
+    assert!(log.contains("Interpolazione fps: 10.000 → 60 fps"), "{log}");
+}
+
+#[tokio::test]
+async fn interpolazione_con_dimensione_target_fa_due_passaggi_a_50_fps() {
+    if !common::ffmpeg_with_svtav1() {
+        eprintln!("ffmpeg con SVT-AV1 e reset_sar non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("sorgente-target-10fps.mp4");
+    common::make_test_video_at_rate(&source, 2, 10);
+    // Il filtro minterpolate gira in entrambi i passaggi: devono produrre la stessa
+    // sequenza di frame, altrimenti il bitrate calcolato non corrisponde all'output.
+    let (job_id, file_id) = avvia_job_con_parametri(
+        &server,
+        &source,
+        "dimensione target con interpolazione",
+        json!({
+            "mode": "target_size",
+            "target_size_mb": 1.0,
+            "preset": 8,
+            "scale_height": 120,
+            "fps_target": 50,
+            "progress_interval": 0.5
+        }),
+    )
+    .await;
+
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "job non completato: {job}");
+
+    let output = server.output_dir.join(&job_id).join("sorgente_av1.mp4");
+    assert_eq!(common::video_codec(&output), "av1");
+    let fps = common::video_frame_rate(&output);
+    assert!((fps - 50.0).abs() < 0.01, "cadenza in uscita: {fps}");
+    let size = std::fs::metadata(&output).unwrap().len();
+    assert!(size > 0 && size < 4_000_000, "dimensione inattesa: {size}");
+
+    let log = file_log_text(&server, &job_id, &file_id).await;
+    assert!(log.contains("Interpolazione fps: 10.000 → 50 fps"), "{log}");
+    assert!(log.contains("bitrate video calcolato"), "{log}");
+    assert!(log.contains("passaggio 2/2"), "{log}");
+}

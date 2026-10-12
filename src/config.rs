@@ -32,6 +32,11 @@ pub struct EncodingParams {
     /// a 1:1. Il valore `0` significa dimensione originale: nessun
     /// ridimensionamento e SAR del sorgente intatto.
     pub scale_height: u32,
+    /// Cadenza di uscita dell'interpolazione dei frame (`minterpolate` a
+    /// compensazione di movimento). `0` lascia la cadenza del sorgente; `50` o
+    /// `60` alzano la cadenza solo se il sorgente è più lento. È indipendente
+    /// dalla modalità di codifica.
+    pub fps_target: u32,
     /// Constant Rate Factor, usato in modalità `crf` e `vmaf_analysis`.
     pub crf: u8,
     pub preset: u8,
@@ -73,6 +78,7 @@ impl Default for EncodingParams {
         Self {
             mode: EncodingMode::Crf,
             scale_height: 480,
+            fps_target: 0,
             crf: 47,
             preset: 1,
             audio_bitrate: "48k".to_string(),
@@ -104,6 +110,10 @@ impl EncodingParams {
                 "scale_height deve essere 0 (dimensione originale) oppure compreso fra 16 e 4320"
                     .into(),
             );
+        }
+        // Valori discreti: l'interpolazione è pensata per i due passi comuni, 50 e 60.
+        if !matches!(self.fps_target, 0 | 50 | 60) {
+            return Err("fps_target deve essere 0 (invariato), 50 oppure 60".into());
         }
         if self.crf > 63 {
             return Err("crf deve essere compreso fra 0 e 63".into());
@@ -483,6 +493,11 @@ impl Config {
                 self.encoding.scale_height = parsed;
             }
         }
+        if let Ok(value) = var("AV1WC_FPS_TARGET") {
+            if let Ok(parsed) = value.parse() {
+                self.encoding.fps_target = parsed;
+            }
+        }
         if let Ok(value) = var("AV1WC_AUDIO_BITRATE") {
             self.encoding.audio_bitrate = value;
         }
@@ -733,5 +748,40 @@ mod tests {
     #[test]
     fn config_di_default_e_valida() {
         assert!(Config::default().validate().is_ok());
+    }
+
+    #[test]
+    fn fps_target_ammette_invariato_50_e_60() {
+        for valore in [0, 50, 60] {
+            let params = EncodingParams {
+                fps_target: valore,
+                ..EncodingParams::default()
+            };
+            assert!(
+                params.validate().is_ok(),
+                "fps_target {valore} dovrebbe essere ammesso"
+            );
+        }
+    }
+
+    #[test]
+    fn fps_target_fuori_dai_valori_discreti_e_rifiutato() {
+        for valore in [1, 24, 25, 61, 120] {
+            let params = EncodingParams {
+                fps_target: valore,
+                ..EncodingParams::default()
+            };
+            assert!(
+                params.validate().is_err(),
+                "fps_target {valore} dovrebbe essere rifiutato"
+            );
+        }
+    }
+
+    #[test]
+    fn job_salvato_senza_fps_target_carica_il_default() {
+        // I job JSON scritti prima di questo campo devono ancora deserializzare.
+        let params: EncodingParams = serde_json::from_str(r#"{"scale_height": 480}"#).unwrap();
+        assert_eq!(params.fps_target, 0);
     }
 }

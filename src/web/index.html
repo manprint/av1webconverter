@@ -106,6 +106,15 @@
                 </select>
               </div>
               <div class="field">
+                <label for="param-fps-target">Interpolazione fps</label>
+                <select id="param-fps-target" name="fps_target">
+                  <option value="0">Invariato</option>
+                  <option value="50">50 fps</option>
+                  <option value="60">60 fps</option>
+                </select>
+                <small>Alza la cadenza solo se la sorgente è più lenta. Conversione molto più lenta e file più grande, soprattutto a 1080p.</small>
+              </div>
+              <div class="field">
                 <label for="param-audio-bitrate">Bitrate audio</label>
                 <input id="param-audio-bitrate" name="audio_bitrate" type="text" placeholder="48k" />
               </div>

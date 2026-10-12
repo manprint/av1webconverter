@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{bail, Result};
 
 use crate::config::EncodingParams;
-use crate::ffmpeg::encode::video_encoder_args;
+use crate::ffmpeg::encode::{video_encoder_args, Interpolazione};
 use crate::models::{MotivoScelta, RisultatoCrf, VmafAnalysis};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -103,7 +103,9 @@ pub fn build_probe_args(request: &SondaRequest<'_>) -> Vec<OsString> {
         "0:v:0".into(),
         "-an".into(),
     ];
-    args.extend(video_encoder_args(request.params));
+    // Le sonde dell'analisi restano sulla cadenza del sorgente: il CRF si sceglie
+    // sulla qualità di codifica, e l'interpolazione aggiungerebbe frame non confrontabili.
+    args.extend(video_encoder_args(request.params, None));
     args.extend([
         "-b:v".into(),
         "0".into(),
@@ -133,6 +135,10 @@ pub struct VmafRequest<'a> {
     /// Geometria del distorto, presente solo quando differisce da quella del
     /// sorgente: libvmaf confronta solo immagini della stessa dimensione.
     pub scale_to: Option<(u32, u32)>,
+    /// Interpolazione applicata anche al riferimento: distorto e sorgente restano
+    /// alla stessa cadenza, così libvmaf accoppia i frame per tempo e la misura
+    /// riflette la perdita di codifica, non la cadenza diversa.
+    pub interpolazione: Option<&'a Interpolazione>,
     pub progress_interval: f64,
 }
 
@@ -148,6 +154,10 @@ pub fn build_vmaf_args(request: &VmafRequest<'_>) -> Vec<OsString> {
     }
     // Le basi tempi vengono allineate perché MP4 e sorgente possono usare timebase diverse.
     // format porta entrambi i rami a profondità e formato accettati da libvmaf.
+    // L'interpolazione viene dopo la scala, come nella codifica, per lavorare sugli stessi frame.
+    if let Some(interpolazione) = request.interpolazione {
+        reference_branch.push_str(&format!(",{}", interpolazione.filtro()));
+    }
     reference_branch.push_str(&format!(",format={}[ref]", request.pixel_format));
     let mut filter = format!(
         "[0:v]settb=AVTB,setpts=PTS-STARTPTS,format={}[dist];{};[dist][ref]libvmaf=model=version={}:log_fmt=json:log_path={}",
@@ -316,6 +326,7 @@ mod tests {
             riferimento_inizio: None,
             riferimento_durata: None,
             scale_to,
+            interpolazione: None,
             progress_interval: 5.0,
         }
     }
@@ -567,5 +578,31 @@ mod tests {
     fn un_log_senza_media_vmaf_restituisce_media_assente() {
         let scores = parse_vmaf_log(r#"{"pooled_metrics":{"vmaf":{"min":80.1}}}"#).unwrap();
         assert_eq!(scores.mean, None);
+    }
+
+    #[test]
+    fn il_riferimento_viene_interpolato_alla_stessa_cadenza_del_distorto() {
+        let interpolazione =
+            Interpolazione::per_job(60, Some((24, 1))).expect("interpolazione attiva");
+        let richiesta = VmafRequest {
+            interpolazione: Some(&interpolazione),
+            ..request(None, None)
+        };
+        let args = build_vmaf_args(&richiesta);
+        let index = args.iter().position(|arg| arg == "-lavfi").unwrap();
+        let filtro = args[index + 1].to_string_lossy().into_owned();
+        assert!(filtro.starts_with("[0:v]settb=AVTB,setpts=PTS-STARTPTS,format=yuv420p10le[dist]"));
+        assert!(filtro.contains(
+            "[1:v]settb=AVTB,setpts=PTS-STARTPTS,minterpolate=fps=60:mi_mode=mci,format=yuv420p10le[ref]"
+        ));
+    }
+
+    #[test]
+    fn senza_interpolazione_il_riferimento_resta_invariato() {
+        let args = build_vmaf_args(&request(None, None));
+        let index = args.iter().position(|arg| arg == "-lavfi").unwrap();
+        let filtro = args[index + 1].to_string_lossy().into_owned();
+        assert!(filtro.contains("[1:v]settb=AVTB,setpts=PTS-STARTPTS,format=yuv420p10le[ref]"));
+        assert!(!filtro.contains("minterpolate"));
     }
 }

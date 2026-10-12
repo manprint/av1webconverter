@@ -150,6 +150,7 @@ poter configurare il container senza montare un TOML. Le più usate:
 | `AV1WC_CRF`                | CRF di default                                     |
 | `AV1WC_PRESET`             | preset SVT-AV1 di default                          |
 | `AV1WC_SCALE_HEIGHT`       | altezza massima dell'output; `0` = dimensione originale |
+| `AV1WC_FPS_TARGET`         | interpolazione fps: `0` = invariata, `50` o `60`   |
 | `AV1WC_SVTAV1_PARAMS`      | `-svtav1-params` di default                        |
 | `AV1WC_MEASURE_VMAF`       | abilita la misura VMAF (`true`/`false`)            |
 | `AV1WC_VMAF_MODEL`         | modello VMAF di default                           |
@@ -202,6 +203,22 @@ Default rilevanti, ereditati dalle misure documentate in `README.image.md`:
   vengono salvati.
 - La scelta `Dimensione originale` può produrre file più grandi e richiedere più
   tempo, perché l'altezza del sorgente non viene ridotta.
+
+### Interpolazione della cadenza
+
+`fps_target` (default `0`) alza la cadenza dell'output a `50` o `60` fps con
+`minterpolate` a compensazione di movimento (`mi_mode=mci`). `0` lascia la cadenza
+del sorgente. L'interpolazione si applica solo se il sorgente è più lento della
+cadenza richiesta: altrimenti viene saltata e il log lo dichiara. Vale in tutte e
+tre le modalità; in `vmaf_analysis` le sonde restano alla cadenza del sorgente e
+l'interpolazione riguarda la sola codifica finale. Si può impostare anche con
+`AV1WC_FPS_TARGET`.
+
+Il costo è reale: la compensazione di movimento lavora su ogni frame generato, quindi
+la conversione è molto più lenta (soprattutto a 1080p) e l'output è più grande perché
+i frame da codificare aumentano. Se la misura VMAF è attiva, il riferimento viene
+interpolato alla stessa cadenza. Il punteggio misura la perdita di codifica; la
+qualità dell'interpolazione va valutata a occhio.
 
 ### Misura VMAF
 

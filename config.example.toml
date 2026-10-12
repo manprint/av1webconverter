@@ -63,6 +63,9 @@ json_file = true
 mode = "crf"
 
 scale_height = 480          # AV1WC_SCALE_HEIGHT — altezza massima, aspetto mantenuto, SAR 1:1; 0 = dimensione originale
+# Interpolazione della cadenza (minterpolate, compensazione di movimento): alza gli
+# fps solo se il sorgente è più lento. Conversione molto più lenta; 0 = invariata.
+fps_target = 0              # AV1WC_FPS_TARGET — 0, 50 oppure 60
 crf = 47                    # AV1WC_CRF — solo in modalità crf
 preset = 1                  # AV1WC_PRESET — 0 lentissimo/migliore, 13 velocissimo
 audio_bitrate = "48k"       # AV1WC_AUDIO_BITRATE — traccia Opus

@@ -20,7 +20,7 @@ Valori proposti dal backend a ogni nuovo job.
 
 ```json
 {
-  "params": { "mode": "crf", "crf": 47, "preset": 1, "scale_height": 480, "vmaf_segments": 3, "crf_test_steps": 3, "vmaf_target": 93.0, "...": "..." },
+  "params": { "mode": "crf", "crf": 47, "preset": 1, "scale_height": 480, "fps_target": 0, "vmaf_segments": 3, "crf_test_steps": 3, "vmaf_target": 93.0, "...": "..." },
   "concurrency": 1,
   "allowed_extensions": ["mp4", "mov", "mkv"],
   "max_upload_mb": 8192
@@ -101,6 +101,14 @@ il default è `_av1`. Può contenere lettere e numeri ASCII, `.`, `-` e `_`
 dimensione originale, cioè nessun ridimensionamento e rapporto dei pixel del
 sorgente conservato. Sono ammessi `0` e i valori fra 16 e 4320; l'interfaccia
 web propone un sottoinsieme di valori comuni, l'API accetta tutto l'intervallo.
+
+`params.fps_target` alza la cadenza dell'output con interpolazione a compensazione
+di movimento (`minterpolate`, `mi_mode=mci`). Valori ammessi: `0` (invariata, default),
+`50` e `60`; altri valori vengono rifiutati con `400`. L'interpolazione si applica
+solo se il sorgente è più lento della cadenza richiesta: altrimenti viene saltata e
+il log lo dichiara. In `vmaf_analysis` le sonde restano alla cadenza del sorgente e
+l'interpolazione riguarda la sola codifica finale. Il job è più lento e l'output
+più grande, soprattutto a 1080p. Il valore è indipendente da `mode`.
 
 `params.measure_vmaf` abilita la misura VMAF dopo la conversione (default
 `false`). `params.vmaf_model` seleziona il modello built-in di libvmaf (default

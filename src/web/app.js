@@ -84,6 +84,17 @@ const PARAM_FIELDS = [
     ],
     dynamicOptionLabel: (value) => `${value}px`,
   },
+  {
+    key: "fps_target",
+    label: "Interpolazione fps",
+    type: "select",
+    numeric: true,
+    options: [
+      ["0", "Invariato"],
+      ["50", "50 fps"],
+      ["60", "60 fps"],
+    ],
+  },
   { key: "audio_bitrate", label: "Bitrate audio", type: "text" },
   {
     key: "svtav1_params",
@@ -360,6 +371,7 @@ function renderJob(job) {
     job.params.scale_height === 0
       ? "dimensione originale"
       : `altezza ${job.params.scale_height}px`,
+    job.params.fps_target ? `interpolazione ${job.params.fps_target} fps` : null,
     `creato ${formatDateTime(job.created_at)}`,
   ]
     .filter(Boolean)

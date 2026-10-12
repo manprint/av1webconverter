@@ -18,7 +18,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::events::Event;
 use crate::ffmpeg::encode::{
     build_crf_args, build_remux_args, build_two_pass_args, compute_video_bitrate, run_ffmpeg,
-    total_passes, FfmpegEvent, RunOutcome,
+    total_passes, FfmpegEvent, Interpolazione, RunOutcome,
 };
 use crate::ffmpeg::probe::probe;
 use crate::ffmpeg::progress::{format_clock, format_progress_line, format_size, ProgressParser};
@@ -241,6 +241,33 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
     )
     .await;
 
+    // La decisione sull'interpolazione vale per tutto il file: codifica, progresso e
+    // misura VMAF devono usare la stessa cadenza di uscita.
+    let interpolazione = Interpolazione::per_job(params.fps_target, info.frame_rate);
+    let frames_codifica = interpolazione.map_or(info.estimated_frames, |interp| {
+        interp.frame_uscita(info.duration_seconds)
+    });
+    if params.fps_target != 0 {
+        let messaggio = match (interpolazione, info.frame_rate) {
+            (Some(interp), _) => format!(
+                "Interpolazione fps: {:.3} → {} fps con minterpolate a compensazione di movimento; frame in uscita stimati {}",
+                interp.fps_sorgente_decimali(),
+                interp.fps_uscita,
+                frames_codifica
+            ),
+            (None, None) => format!(
+                "Interpolazione fps {} richiesta ma cadenza del sorgente sconosciuta: interpolazione saltata",
+                params.fps_target
+            ),
+            (None, Some((numeratore, denominatore))) => format!(
+                "Interpolazione fps {} richiesta ma il sorgente è già a {:.3} fps: interpolazione saltata",
+                params.fps_target,
+                numeratore as f64 / denominatore as f64
+            ),
+        };
+        log_line(state, job_id, file_id, &messaggio).await;
+    }
+
     let temp_dir = state.temp_dir();
     tokio::fs::create_dir_all(&temp_dir)
         .await
@@ -282,6 +309,15 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
     let passi_totali = passi_totali(&params, sonde);
     let mut cancel = handle.cancel_rx();
 
+    if interpolazione.is_some() && params.mode == EncodingMode::VmafAnalysis {
+        log_line(
+            state,
+            job_id,
+            file_id,
+            "Analisi VMAF: le sonde restano alla cadenza del sorgente, l'interpolazione si applica solo alla codifica finale",
+        )
+        .await;
+    }
     let (params_codifica, vmaf_analysis) = if params.mode == EncodingMode::VmafAnalysis {
         let Some((crf_scelto, analisi)) = analizza_file(
             state,
@@ -315,9 +351,12 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
             u32::from(pass)
         };
         let args = match params_codifica.mode {
-            EncodingMode::Crf | EncodingMode::VmafAnalysis => {
-                build_crf_args(&params_codifica, &input_path, &temp_mkv)
-            }
+            EncodingMode::Crf | EncodingMode::VmafAnalysis => build_crf_args(
+                &params_codifica,
+                &input_path,
+                &temp_mkv,
+                interpolazione.as_ref(),
+            ),
             EncodingMode::TargetSize => {
                 let bitrate = compute_video_bitrate(&params_codifica, &info)?;
                 if pass == 1 {
@@ -340,6 +379,7 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
                     &passlog,
                     bitrate,
                     pass,
+                    interpolazione.as_ref(),
                 )
             }
         };
@@ -358,7 +398,7 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
 
         let parser = ProgressParser::new(
             info.duration_seconds,
-            info.estimated_frames,
+            frames_codifica,
             pass_number(pass_progress),
             passi_totali,
         );
@@ -428,6 +468,7 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
             &output_path,
             &vmaf_json,
             passi_totali,
+            interpolazione,
             &mut cancel,
         )
         .await;
@@ -477,6 +518,7 @@ async fn measure_vmaf(
     output_path: &Path,
     log_json: &Path,
     total_passes: u8,
+    interpolazione: Option<Interpolazione>,
     cancel: &mut tokio::sync::watch::Receiver<bool>,
 ) -> VmafMeasurement {
     let started = std::time::Instant::now();
@@ -544,12 +586,15 @@ async fn measure_vmaf(
         riferimento_inizio: None,
         riferimento_durata: None,
         scale_to,
+        interpolazione: interpolazione.as_ref(),
         progress_interval: params.progress_interval,
     };
     let args = build_vmaf_args(&request);
     let parser = ProgressParser::new(
         source_info.duration_seconds,
-        source_info.estimated_frames,
+        interpolazione.map_or(source_info.estimated_frames, |interp| {
+            interp.frame_uscita(source_info.duration_seconds)
+        }),
         total_passes,
         total_passes,
     );
@@ -806,6 +851,7 @@ async fn analizza_file(
                 riferimento_inizio: Some(segmento.inizio_secondi),
                 riferimento_durata: Some(segmento.durata_secondi),
                 scale_to,
+                interpolazione: None,
                 progress_interval: params.progress_interval,
             };
             let vmaf_args = build_vmaf_args(&request);

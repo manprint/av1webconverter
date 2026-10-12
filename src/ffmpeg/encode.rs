@@ -47,6 +47,65 @@ pub fn scale_filter(scale_height: u32) -> Option<String> {
     Some(format!("scale=-2:{height}:reset_sar=1"))
 }
 
+/// Interpolazione dei frame richiesta da un job: porta la cadenza del sorgente
+/// alla cadenza scelta con `minterpolate` a compensazione di movimento.
+///
+/// Esiste solo quando serve davvero: [`Interpolazione::per_job`] restituisce
+/// `None` se la richiesta è `0`, se la cadenza del sorgente è ignota o se il
+/// sorgente è già alla cadenza richiesta, perché l'interpolazione non rimuove frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Interpolazione {
+    /// Cadenza di uscita in fps interi, 50 o 60.
+    pub fps_uscita: u32,
+    /// Cadenza del sorgente come frazione, es. `24000/1001` per 23.976 fps.
+    pub fps_sorgente: (u64, u64),
+}
+
+impl Interpolazione {
+    /// Sotto questa distanza dal target la cadenza conta come già raggiunta:
+    /// 59.94 fps non va portato a 60 con un'interpolazione che non aggiunge nulla.
+    const TOLLERANZA_FPS: f64 = 0.5;
+
+    pub fn per_job(fps_target: u32, fps_sorgente: Option<(u64, u64)>) -> Option<Self> {
+        let (numeratore, denominatore) = fps_sorgente?;
+        if fps_target == 0 || numeratore == 0 || denominatore == 0 {
+            return None;
+        }
+        let sorgente = numeratore as f64 / denominatore as f64;
+        if sorgente >= f64::from(fps_target) - Self::TOLLERANZA_FPS {
+            return None;
+        }
+        Some(Self {
+            fps_uscita: fps_target,
+            fps_sorgente: (numeratore, denominatore),
+        })
+    }
+
+    /// Cadenza del sorgente in fps decimali.
+    pub fn fps_sorgente_decimali(&self) -> f64 {
+        self.fps_sorgente.0 as f64 / self.fps_sorgente.1 as f64
+    }
+
+    /// Filtro da accodare alla scala. `mi_mode=mci` è la modalità a compensazione
+    /// di movimento; gli altri parametri restano ai default di ffmpeg.
+    pub fn filtro(&self) -> String {
+        format!("minterpolate=fps={}:mi_mode=mci", self.fps_uscita)
+    }
+
+    /// Distanza fra keyframe riscalata: `keyint` conta frame, quindi a cadenza più
+    /// alta va moltiplicata per il rapporto, così il GOP dura gli stessi secondi.
+    pub fn keyint(&self, keyint: u32) -> u32 {
+        (f64::from(keyint) * f64::from(self.fps_uscita) / self.fps_sorgente_decimali()).round()
+            as u32
+    }
+
+    /// Frame prodotti in uscita per una durata: è il totale usato dal progresso,
+    /// perché `frame=` di ffmpeg conta i frame interpolati.
+    pub fn frame_uscita(&self, durata_secondi: f64) -> u64 {
+        (durata_secondi * f64::from(self.fps_uscita)).round() as u64
+    }
+}
+
 fn common_input_args(params: &EncodingParams, input: &Path) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec![
         "-nostdin".into(),
@@ -69,20 +128,29 @@ fn common_input_args(params: &EncodingParams, input: &Path) -> Vec<OsString> {
     args
 }
 
-pub(crate) fn video_encoder_args(params: &EncodingParams) -> Vec<OsString> {
+pub(crate) fn video_encoder_args(
+    params: &EncodingParams,
+    interpolazione: Option<&Interpolazione>,
+) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec!["-c:v".into(), "libsvtav1".into()];
-    // Nessun filtro in modalità dimensione originale: -vf va omesso, non svuotato.
-    if let Some(filter) = scale_filter(params.scale_height) {
+    // Scala e interpolazione condividono un solo -vf, nell'ordine scala →
+    // interpolazione: minterpolate lavora così su frame già ridotti.
+    // Senza filtri -vf va omesso, non svuotato.
+    let mut filtri: Vec<String> = Vec::new();
+    filtri.extend(scale_filter(params.scale_height));
+    filtri.extend(interpolazione.map(Interpolazione::filtro));
+    if !filtri.is_empty() {
         args.push("-vf".into());
-        args.push(filter.into());
+        args.push(filtri.join(",").into());
     }
+    let keyint = interpolazione.map_or(params.keyint, |i| i.keyint(params.keyint));
     args.extend([
         "-preset".into(),
         params.preset.to_string().into(),
         "-svtav1-params".into(),
         params.effective_svtav1_params().into(),
         "-g".into(),
-        params.keyint.to_string().into(),
+        keyint.to_string().into(),
         "-pix_fmt".into(),
         params.pixel_format.clone().into(),
     ]);
@@ -90,10 +158,15 @@ pub(crate) fn video_encoder_args(params: &EncodingParams) -> Vec<OsString> {
 }
 
 /// Codifica a qualità costante, un solo passaggio.
-pub fn build_crf_args(params: &EncodingParams, input: &Path, output_mkv: &Path) -> Vec<OsString> {
+pub fn build_crf_args(
+    params: &EncodingParams,
+    input: &Path,
+    output_mkv: &Path,
+    interpolazione: Option<&Interpolazione>,
+) -> Vec<OsString> {
     let mut args = common_input_args(params, input);
     args.extend(["-map".into(), "0:v:0".into(), "-map".into(), "0:a?".into()]);
-    args.extend(video_encoder_args(params));
+    args.extend(video_encoder_args(params, interpolazione));
     args.extend([
         "-b:v".into(),
         "0".into(),
@@ -119,13 +192,14 @@ pub fn build_two_pass_args(
     passlogfile: &Path,
     video_bitrate_bps: u64,
     pass: u8,
+    interpolazione: Option<&Interpolazione>,
 ) -> Vec<OsString> {
     let mut args = common_input_args(params, input);
     args.extend(["-map".into(), "0:v:0".into()]);
     if pass == 2 {
         args.extend(["-map".into(), "0:a?".into()]);
     }
-    args.extend(video_encoder_args(params));
+    args.extend(video_encoder_args(params, interpolazione));
     args.extend([
         "-b:v".into(),
         format!("{video_bitrate_bps}").into(),
@@ -387,6 +461,7 @@ mod tests {
             &params,
             Path::new("/in/a.mp4"),
             Path::new("/tmp/a.mkv"),
+            None,
         ));
         assert!(!args.iter().any(|arg| arg == "-vf"));
         assert!(!args.iter().any(|arg| arg.contains("scale=-2")));
@@ -408,6 +483,7 @@ mod tests {
             Path::new("/tmp/a.log"),
             1_000_000,
             1,
+            None,
         ));
         assert!(!args.iter().any(|arg| arg == "-vf"));
         assert!(!args.iter().any(|arg| arg.contains("scale=-2")));
@@ -420,6 +496,7 @@ mod tests {
             &params,
             &PathBuf::from("/in/film.mp4"),
             &PathBuf::from("/tmp/out.mkv"),
+            None,
         );
         let args = as_strings(&args);
         let joined = args.join(" ");
@@ -442,7 +519,8 @@ mod tests {
         assert!(!as_strings(&build_crf_args(
             &params,
             Path::new("/in/a.mp4"),
-            Path::new("/tmp/a.mkv")
+            Path::new("/tmp/a.mkv"),
+            None,
         ))
         .contains(&"-threads".to_string()));
         params.cpus = Some(4);
@@ -450,6 +528,7 @@ mod tests {
             &params,
             Path::new("/in/a.mp4"),
             Path::new("/tmp/a.mkv"),
+            None,
         ));
         let index = args.iter().position(|arg| arg == "-threads").unwrap();
         assert_eq!(args[index + 1], "4");
@@ -469,6 +548,7 @@ mod tests {
             Path::new("/tmp/a.log"),
             1_000_000,
             1,
+            None,
         ));
         let joined = args.join(" ");
         assert!(joined.contains("-pass 1"));
@@ -494,6 +574,7 @@ mod tests {
             Path::new("/tmp/a.log"),
             1_000_000,
             2,
+            None,
         ));
         let joined = args.join(" ");
         assert!(joined.contains("-pass 2"));
@@ -566,5 +647,102 @@ mod tests {
             total_passes_with_measure(EncodingMode::TargetSize, false),
             2
         );
+    }
+
+    /// Valore che segue `-vf` negli argomenti, se presente.
+    fn valore_vf(args: &[String]) -> Option<&str> {
+        let index = args.iter().position(|arg| arg == "-vf")?;
+        args.get(index + 1).map(String::as_str)
+    }
+
+    #[test]
+    fn interpolazione_aggiunge_minterpolate_dopo_la_scala() {
+        let params = EncodingParams {
+            scale_height: 480,
+            ..EncodingParams::default()
+        };
+        let interp = Interpolazione::per_job(60, Some((24, 1))).expect("interpolazione attiva");
+        let args = as_strings(&build_crf_args(
+            &params,
+            Path::new("/in/a.mp4"),
+            Path::new("/tmp/a.mkv"),
+            Some(&interp),
+        ));
+        assert_eq!(
+            valore_vf(&args),
+            Some("scale=-2:trunc(min(480\\,ih)/2)*2:reset_sar=1,minterpolate=fps=60:mi_mode=mci")
+        );
+    }
+
+    #[test]
+    fn interpolazione_senza_scala_usa_solo_minterpolate() {
+        let params = EncodingParams {
+            scale_height: 0,
+            ..EncodingParams::default()
+        };
+        let interp = Interpolazione::per_job(50, Some((25, 1))).expect("interpolazione attiva");
+        let args = as_strings(&build_crf_args(
+            &params,
+            Path::new("/in/a.mp4"),
+            Path::new("/tmp/a.mkv"),
+            Some(&interp),
+        ));
+        assert_eq!(valore_vf(&args), Some("minterpolate=fps=50:mi_mode=mci"));
+    }
+
+    #[test]
+    fn interpolazione_riscala_il_gop_per_mantenere_i_secondi() {
+        let params = EncodingParams::default();
+        let interp = Interpolazione::per_job(60, Some((24, 1))).expect("interpolazione attiva");
+        let args = as_strings(&build_crf_args(
+            &params,
+            Path::new("/in/a.mp4"),
+            Path::new("/tmp/a.mkv"),
+            Some(&interp),
+        ));
+        let index = args.iter().position(|arg| arg == "-g").unwrap();
+        // 240 frame a 24 fps sono 10 s: a 60 fps servono 600 frame.
+        assert_eq!(args[index + 1], "600");
+    }
+
+    #[test]
+    fn interpolazione_non_si_attiva_alla_cadenza_richiesta_o_oltre() {
+        // 59.94 fps è già il 60 dei video NTSC: nessuna interpolazione.
+        assert!(Interpolazione::per_job(60, Some((60000, 1001))).is_none());
+        assert!(Interpolazione::per_job(50, Some((50, 1))).is_none());
+        // Un sorgente più veloce non viene rallentato: l'interpolazione non rimuove frame.
+        assert!(Interpolazione::per_job(50, Some((60, 1))).is_none());
+        assert!(Interpolazione::per_job(0, Some((24, 1))).is_none());
+        assert!(Interpolazione::per_job(60, None).is_none());
+        assert!(Interpolazione::per_job(60, Some((24000, 1001))).is_some());
+    }
+
+    #[test]
+    fn frame_di_uscita_seguono_la_cadenza_richiesta() {
+        let interp = Interpolazione::per_job(60, Some((24, 1))).expect("interpolazione attiva");
+        assert_eq!(interp.frame_uscita(10.0), 600);
+        assert_eq!(interp.keyint(240), 600);
+    }
+
+    #[test]
+    fn il_secondo_passaggio_applica_l_interpolazione() {
+        let params = EncodingParams {
+            mode: EncodingMode::TargetSize,
+            target_size_mb: Some(300.0),
+            ..Default::default()
+        };
+        let interp = Interpolazione::per_job(50, Some((25, 1))).expect("interpolazione attiva");
+        let args = as_strings(&build_two_pass_args(
+            &params,
+            Path::new("/in/a.mp4"),
+            Path::new("/tmp/a.mkv"),
+            Path::new("/tmp/a.log"),
+            1_000_000,
+            2,
+            Some(&interp),
+        ));
+        assert!(valore_vf(&args)
+            .unwrap()
+            .contains("minterpolate=fps=50:mi_mode=mci"));
     }
 }

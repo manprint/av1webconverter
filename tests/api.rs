@@ -409,6 +409,111 @@ async fn un_altezza_come_stringa_viene_rifiutata() {
 }
 
 #[tokio::test]
+async fn fps_target_accetta_invariato_50_e_60() {
+    let server = common::start().await;
+    for fps in [0, 50, 60] {
+        let response = server
+            .client
+            .post(server.url("/api/jobs"))
+            .json(&json!({ "name": "fps", "params": { "fps_target": fps } }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "fps_target {fps} rifiutato");
+
+        let job: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(job["params"]["fps_target"], fps);
+    }
+}
+
+#[tokio::test]
+async fn fps_target_fuori_dai_valori_discreti_e_rifiutato() {
+    let server = common::start().await;
+    for params in [
+        json!({ "fps_target": 25 }),
+        json!({ "fps_target": 24 }),
+        json!({ "fps_target": 61 }),
+        json!({ "fps_target": 120 }),
+    ] {
+        let response = server
+            .client
+            .post(server.url("/api/jobs"))
+            .json(&json!({ "name": "fps", "params": params }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400, "parametri accettati: {params}");
+    }
+
+    // Una stringa non è un numero: il rifiuto arriva dall'estrattore Json.
+    let response = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({ "name": "x", "params": { "fps_target": "60" } }))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_client_error());
+}
+
+#[tokio::test]
+async fn fps_target_si_modifica_e_resta_salvato_dopo_un_rifiuto() {
+    let server = common::start().await;
+    let job = create_job(&server, "fps").await;
+    let job_id = job["id"].as_str().unwrap();
+    assert_eq!(job["params"]["fps_target"], 0);
+
+    let updated: serde_json::Value = server
+        .client
+        .patch(server.url(&format!("/api/jobs/{job_id}")))
+        .json(&json!({ "params": { "fps_target": 50 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(updated["params"]["fps_target"], 50);
+
+    // Un valore fuori dai discreti non deve sovrascrivere quello già salvato.
+    let response = server
+        .client
+        .patch(server.url(&format!("/api/jobs/{job_id}")))
+        .json(&json!({ "params": { "fps_target": 30 } }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+
+    let reread: serde_json::Value = server
+        .client
+        .get(server.url(&format!("/api/jobs/{job_id}")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reread["params"]["fps_target"], 50);
+}
+
+#[tokio::test]
+async fn i_default_fps_target_arrivano_dalla_configurazione() {
+    let server = common::start_with(|config| config.encoding.fps_target = 60).await;
+
+    let body: serde_json::Value = server
+        .client
+        .get(server.url("/api/defaults"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["params"]["fps_target"], 60);
+}
+
+#[tokio::test]
 async fn job_inesistente_risponde_404() {
     let server = common::start().await;
     let missing = uuid::Uuid::new_v4();

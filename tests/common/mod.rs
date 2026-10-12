@@ -125,15 +125,21 @@ pub fn ffmpeg_with_libvmaf() -> bool {
     }
 }
 
-/// Genera un MP4 di prova con traccia video e audio.
+/// Genera un MP4 di prova con traccia video e audio, a 10 fps.
 pub fn make_test_video(path: &Path, seconds: u32) {
+    make_test_video_at_rate(path, seconds, 10);
+}
+
+/// Come `make_test_video`, ma con la cadenza scelta: serve a provare
+/// l'interpolazione da sorgenti più lenti o già alla cadenza richiesta.
+pub fn make_test_video_at_rate(path: &Path, seconds: u32, fps: u32) {
     let status = std::process::Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error", "-y"])
         .args([
             "-f",
             "lavfi",
             "-i",
-            &format!("testsrc=duration={seconds}:size=640x360:rate=10"),
+            &format!("testsrc=duration={seconds}:size=640x360:rate={fps}"),
         ])
         .args([
             "-f",
@@ -168,6 +174,30 @@ pub fn make_anamorphic_video(path: &Path, seconds: u32) {
         status.success(),
         "ffmpeg non ha generato il video anamorfico"
     );
+}
+
+/// Cadenza dichiarata del primo stream video (`r_frame_rate`), come numero.
+pub fn video_frame_rate(path: &Path) -> f64 {
+    let output = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=r_frame_rate",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .expect("ffprobe sulla cadenza");
+    let text = String::from_utf8_lossy(&output.stdout);
+    let (num, den) = text
+        .trim()
+        .split_once('/')
+        .unwrap_or_else(|| panic!("cadenza inattesa: {text:?}"));
+    num.parse::<f64>().expect("numeratore") / den.parse::<f64>().expect("denominatore")
 }
 
 /// Geometria del primo stream video: larghezza, altezza, SAR, DAR.
