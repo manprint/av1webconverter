@@ -249,7 +249,7 @@ mod tests {
         let file = std::fs::File::open(&zip_path).unwrap();
         let mut archive = zip::ZipArchive::new(file).unwrap();
         assert_eq!(archive.len(), 1);
-        assert_eq!(archive.by_index(0).unwrap().name(), "a_av1.mp4");
+        assert_eq!(archive.by_index(0).unwrap().name().unwrap(), "a_av1.mp4");
     }
 
     #[test]

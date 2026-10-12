@@ -37,7 +37,7 @@ parte SSH: ffmpeg viene eseguito nello stesso container del servizio.
 ## Requisiti
 
 - Per l'uso in container: Docker.
-- Per lo sviluppo locale: Rust 1.85+ e `ffmpeg`/`ffprobe` con `libsvtav1` e
+- Per lo sviluppo locale: Rust 1.89+ e `ffmpeg`/`ffprobe` con `libsvtav1` e
   `libopus` nel PATH.
 
 ## Avvio con Docker
