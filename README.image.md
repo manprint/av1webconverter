@@ -2,9 +2,9 @@
 
 L'immagine locale contiene:
 
-- FFmpeg 9.0.1;
+- FFmpeg 9.0.2;
 - SVT-AV1 4.2.0;
-- libvmaf 3.2.0;
+- libvmaf 3.2.1;
 - dav1d 1.5.4 per decodificare e misurare gli output AV1;
 - libopus 1.6.1 compilato staticamente;
 - `ffprobe`.
@@ -16,28 +16,28 @@ Le versioni e le checksum degli archivi sorgente sono fissate in
 
 ```bash
 docker build -f Dockerfile.ffmpeg-svtav1 \
-  -t local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0 .
+  -t local/ffmpeg-svtav1:9.0.2-svt4.2.0-vmaf3.2.1 .
 ```
 
-La build include FFmpeg 9.0.1, SVT-AV1 4.2.0, libVMAF 3.2.0, dav1d 1.5.4
+La build include FFmpeg 9.0.2, SVT-AV1 4.2.0, libVMAF 3.2.1, dav1d 1.5.4
 e libopus 1.6.1 statico. Per verificare rapidamente i componenti:
 
 ```bash
-docker run --rm --entrypoint sh local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0 -c \
+docker run --rm --entrypoint sh local/ffmpeg-svtav1:9.0.2-svt4.2.0-vmaf3.2.1 -c \
   'ffmpeg -hide_banner -version | head -1; ffmpeg -hide_banner -filters | grep libvmaf'
 ```
 
 ## Immagine pubblicata su GHCR
 
 ```bash
-docker pull ghcr.io/manprint/av1webconverter-ffmpeg:9.0.1-svt4.2.0-vmaf3.2.0
+docker pull ghcr.io/manprint/av1webconverter-ffmpeg:9.0.2-svt4.2.0-vmaf3.2.1
 ```
 
 Il workflow attivato dal tag `v1.0.0` pubblica automaticamente questa base
 prima dell'immagine applicativa. Per usarla negli script:
 
 ```bash
-FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.1-svt4.2.0-vmaf3.2.0 \
+FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.2-svt4.2.0-vmaf3.2.1 \
 ./execute_docker.sh
 ```
 
@@ -45,18 +45,18 @@ FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.1-svt4.2.0-vmaf3.2.0 \
 
 Lo stesso riferimento immagine deve essere disponibile sull'host locale e su
 quello remoto. Il default
-`local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0` è utile per i
+`local/ffmpeg-svtav1:9.0.2-svt4.2.0-vmaf3.2.1` è utile per i
 test locali; per una conversione reale usare il tag pubblicato su GHCR:
 
 ```bash
-FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.1-svt4.2.0-vmaf3.2.0 \
+FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.2-svt4.2.0-vmaf3.2.1 \
 ./execute_docker.sh
 ```
 
 Gli output già esistenti vengono saltati. Per sovrascriverli:
 
 ```bash
-FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.1-svt4.2.0-vmaf3.2.0 \
+FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.2-svt4.2.0-vmaf3.2.1 \
 OVERWRITE=1 \
 ./execute_docker.sh
 ```
@@ -64,7 +64,7 @@ OVERWRITE=1 \
 I parametri principali sono configurabili senza modificare gli script:
 
 ```bash
-FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.1-svt4.2.0-vmaf3.2.0 \
+FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.2-svt4.2.0-vmaf3.2.1 \
 CRF=45 PRESET=5 SVTAV1_PARAMS=tune=5 \
 ./execute_docker.sh
 ```

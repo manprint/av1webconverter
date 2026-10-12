@@ -90,7 +90,7 @@ pub async fn start() -> TestServer {
 
 /// Vero se ffmpeg e ffprobe offrono le funzionalità richieste dal runtime:
 /// libsvtav1 e l'opzione `reset_sar` del filtro scale, presenti nell'immagine
-/// custom basata su FFmpeg 9.0.1.
+/// custom basata su FFmpeg 9.0.2.
 pub fn ffmpeg_with_svtav1() -> bool {
     let encoders = std::process::Command::new("ffmpeg")
         .args(["-hide_banner", "-encoders"])

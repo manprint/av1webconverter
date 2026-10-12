@@ -8,14 +8,14 @@
 # checksum. Va costruita (o scaricata) prima:
 #
 #   docker build -f Dockerfile.ffmpeg-svtav1 \
-#     -t local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0 .
+#     -t local/ffmpeg-svtav1:9.0.2-svt4.2.0-vmaf3.2.1 .
 #   docker build -t av1webconverter:local .
 #
 # Per usare la base pubblicata dal workflow su GHCR:
-#   docker build --build-arg FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.1-svt4.2.0-vmaf3.2.0 -t av1webconverter:local .
+#   docker build --build-arg FFMPEG_IMAGE=ghcr.io/manprint/av1webconverter-ffmpeg:9.0.2-svt4.2.0-vmaf3.2.1 -t av1webconverter:local .
 
-ARG FFMPEG_IMAGE=local/ffmpeg-svtav1:9.0.1-svt4.2.0-vmaf3.2.0
-ARG RUST_IMAGE=rust:1.96-bookworm
+ARG FFMPEG_IMAGE=local/ffmpeg-svtav1:9.0.2-svt4.2.0-vmaf3.2.1
+ARG RUST_IMAGE=rust:1.99-bookworm
 
 FROM ${FFMPEG_IMAGE} AS ffmpeg
 

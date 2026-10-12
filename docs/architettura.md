@@ -41,7 +41,7 @@ Riproduce `start_av1_docker.sh`, senza la parte SSH:
 Un output già presente viene saltato (stato `skipped`) a meno che `overwrite` sia
 attivo — come negli script di riferimento.
 
-Il filtro usa `reset_sar=1`, disponibile nella build FFmpeg 9.0.1 inclusa
+Il filtro usa `reset_sar=1`, disponibile nella build FFmpeg 9.0.2 inclusa
 nell'immagine applicativa. I test end-to-end locali vengono saltati se il binario
 di sistema non espone questa opzione o l'encoder `libsvtav1`.
 

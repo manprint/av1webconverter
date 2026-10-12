@@ -32,7 +32,7 @@ pub enum RunOutcome {
 ///
 /// `reset_sar=1` fa sì che `scale` compensi il SAR del sorgente quando calcola
 /// la larghezza automatica (`-2`) e produca pixel quadrati. È disponibile nella
-/// build FFmpeg 9.0.1 usata dall'immagine applicativa.
+/// build FFmpeg 9.0.2 usata dall'immagine applicativa.
 ///
 /// La virgola dentro `min()` va protetta, perché la virgola separa i filtri.
 ///
