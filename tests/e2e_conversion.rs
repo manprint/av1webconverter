@@ -227,7 +227,10 @@ async fn conversione_crf_dall_upload_al_download() {
     let archive = zip::ZipArchive::new(std::io::Cursor::new(selection.to_vec()))
         .expect("archivio ZIP valido");
     assert_eq!(archive.len(), 1);
-    assert_eq!(archive.file_names().next().unwrap().unwrap(), "sorgente_web.mp4");
+    assert_eq!(
+        archive.file_names().next().unwrap().unwrap(),
+        "sorgente_web.mp4"
+    );
 
     // La cartella temporanea non deve accumulare residui.
     let temp_entries: Vec<_> = std::fs::read_dir(server.temp.path().join("data/tmp"))
