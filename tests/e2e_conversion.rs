@@ -661,6 +661,164 @@ async fn la_dimensione_originale_non_ridimensiona() {
 }
 
 #[tokio::test]
+async fn un_audio_ac3_5_1_diventa_opus_stereo() {
+    if !common::ffmpeg_with_svtav1() {
+        eprintln!("ffmpeg con SVT-AV1 non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("surround.mp4");
+    common::make_surround_video(&source, 2);
+    assert_eq!(common::audio_streams(&source), ["ac3,6,5.1(side)"]);
+
+    let job: serde_json::Value = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({ "name": "audio 5.1" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    upload_file(&server, &job_id, "surround.mp4", &source).await;
+
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/start")))
+        .send()
+        .await
+        .unwrap();
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    // Senza downmix libopus rifiuta il 5.1(side) e il file fallisce.
+    assert_eq!(job["status"], "completed", "{job}");
+
+    let output_path = server.output_dir.join(&job_id).join("surround_av1.mp4");
+    assert_eq!(common::audio_streams(&output_path), ["opus,2,stereo"]);
+}
+
+#[tokio::test]
+async fn il_gop_dura_dieci_secondi_al_frame_rate_del_sorgente() {
+    if !common::ffmpeg_with_svtav1() {
+        eprintln!("ffmpeg con SVT-AV1 non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("trenta.mp4");
+    common::make_test_video_at(&source, 25, 30, "640x360");
+
+    let job: serde_json::Value = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({ "name": "gop" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    assert_eq!(job["params"]["keyint_seconds"], 10.0);
+    let uploaded = upload_file(&server, &job_id, "trenta.mp4", &source).await;
+    let file_id = uploaded["job"]["files"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/start")))
+        .send()
+        .await
+        .unwrap();
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "{job}");
+
+    // 30 fps × 10 s = 300 frame: con i 240 frame fissi di prima i keyframe
+    // cadrebbero a 0, 8, 16 e 24 s.
+    let log = file_log_text(&server, &job_id, &file_id).await;
+    assert!(log.contains("Keyframe ogni 300 fotogrammi"), "{log}");
+    let output_path = server.output_dir.join(&job_id).join("trenta_av1.mp4");
+    let keyframes = common::keyframe_times(&output_path);
+    assert_eq!(keyframes.len(), 3, "keyframe inattesi: {keyframes:?}");
+    for (time, expected) in keyframes.iter().zip([0.0, 10.0, 20.0]) {
+        assert!(
+            (time - expected).abs() < 0.05,
+            "keyframe a {time} s invece di {expected} s: {keyframes:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn un_sorgente_hd_senza_tag_viene_dichiarato_bt709() {
+    if !common::ffmpeg_with_svtav1() || !common::ffmpeg_with_libvmaf() {
+        eprintln!("ffmpeg con SVT-AV1 e libvmaf non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("hd.mp4");
+    common::make_test_video_at(&source, 2, 10, "1280x720");
+    assert_eq!(
+        common::color_tags(&source),
+        "unknown,unknown,unknown,unknown"
+    );
+
+    let job: serde_json::Value = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({ "name": "hd senza tag", "params": { "measure_vmaf": true } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    let uploaded = upload_file(&server, &job_id, "hd.mp4", &source).await;
+    let file_id = uploaded["job"]["files"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/start")))
+        .send()
+        .await
+        .unwrap();
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "{job}");
+
+    // Ridotto a 120 righe, senza tag verrebbe letto come BT.601.
+    let output_path = server.output_dir.join(&job_id).join("hd_av1.mp4");
+    assert_eq!(common::color_tags(&output_path), "tv,bt709,bt709,bt709");
+    let log = file_log_text(&server, &job_id, &file_id).await;
+    assert!(log.contains("dichiarato BT.709"), "{log}");
+
+    // I tag non devono falsare la misura: con tag diversi fra i due rami
+    // FFmpeg 9 converte un ramo e il VMAF crolla. Il punteggio dell'app deve
+    // coincidere con quello del distorto riportato senza tag.
+    let score = job["files"][0]["vmaf"]["score"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("VMAF assente: {job}"));
+    let (width, height, _, _) = common::video_geometry(&output_path);
+    let expected = common::vmaf_score(
+        &output_path,
+        "setparams=colorspace=unknown:color_primaries=unknown:color_trc=unknown,",
+        &source,
+        &format!("scale=w={width}:h={height}:flags=bicubic:reset_sar=1,"),
+        "vmaf_v1.0.16_5d0h",
+    );
+    assert!(
+        (score - expected).abs() < 0.001,
+        "VMAF {score} diverso da quello senza tag {expected}"
+    );
+}
+
+#[tokio::test]
 async fn un_sorgente_non_valido_fa_fallire_solo_il_suo_file() {
     if !common::ffmpeg_with_svtav1() {
         eprintln!("ffmpeg con SVT-AV1 e reset_sar non disponibile: test saltato");
@@ -1011,6 +1169,70 @@ async fn un_file_corto_viene_analizzato_per_intero() {
         (9.0..=10.5).contains(&durata),
         "durata segmento inattesa: {durata}"
     );
+}
+
+#[tokio::test]
+async fn a_60_fps_la_vmaf_usa_il_modello_hfr() {
+    if !common::ffmpeg_with_svtav1() || !common::ffmpeg_with_libvmaf() {
+        eprintln!("ffmpeg con SVT-AV1, reset_sar e libvmaf non disponibile: test saltato");
+        return;
+    }
+
+    let server = common::start().await;
+    let source = server.temp.path().join("sessanta.mp4");
+    common::make_test_video_at(&source, 3, 60, "640x360");
+
+    // Misura dopo la conversione.
+    let job: serde_json::Value = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({ "name": "misura 60 fps", "params": { "measure_vmaf": true } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    assert_eq!(job["params"]["vmaf_model"], "vmaf_v1.0.16_5d0h");
+    let uploaded = upload_file(&server, &job_id, "sessanta.mp4", &source).await;
+    let file_id = uploaded["job"]["files"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/start")))
+        .send()
+        .await
+        .unwrap();
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "{job}");
+    let vmaf = &job["files"][0]["vmaf"];
+    assert_eq!(vmaf["model"], "vmaf_v1.0.16_hfr_5d0h", "{vmaf}");
+    let log = file_log_text(&server, &job_id, &file_id).await;
+    assert!(log.contains("alto frame rate"), "{log}");
+
+    // A 60 fps il Matroska intermedio arrotonda i timestamp al millisecondo:
+    // il punteggio deve restare quello del confronto frame per frame.
+    let score = vmaf["score"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("VMAF assente: {vmaf}"));
+    let output_path = server.output_dir.join(&job_id).join("sessanta_av1.mp4");
+    let expected = common::vmaf_score(&output_path, "", &source, "", "vmaf_v1.0.16_hfr_5d0h");
+    assert!(
+        (score - expected).abs() < 0.01,
+        "VMAF {score} diverso dal confronto frame per frame {expected}"
+    );
+
+    // Analisi preliminare: anche le sonde usano la variante HFR.
+    let (job_id, _file_id) =
+        start_analysis_job(&server, &source, "analisi 60 fps", 1, 1, 50.0).await;
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "{job}");
+    let analisi = &job["files"][0]["vmaf_analysis"];
+    assert_eq!(analisi["modello"], "vmaf_v1.0.16_hfr_5d0h", "{analisi}");
+    assert!(analisi["error"].is_null(), "{analisi}");
 }
 
 #[tokio::test]

@@ -79,6 +79,13 @@ superiore (46,314 contro 45,998 dB) e può essere selezionato con
 Le vecchie opzioni `enable-qm=1:qm-min=0` restano escluse perché nei test
 hanno ridotto sia SSIM sia PSNR.
 
+Le misure su SVT-AV1 4.2.0 che hanno fissato gli altri default (variance boost,
+grana sintetica, GOP in secondi, modelli VMAF ad alto frame rate) sono raccolte
+in [docs/qualita-codifica.md](docs/qualita-codifica.md). Su sorgenti con banding
+evidente, come cieli, gradienti e scene scure, la grana sintetica si attiva con
+`SVTAV1_PARAMS=tune=5:film-grain=8`: elimina il banding al costo di circa il
+19% di file in più.
+
 ## Parametri non gestiti dagli script
 
 Gli script presenti in questo repository gestiscono la modalità CRF. La
@@ -102,4 +109,9 @@ di misura usa `model=version=vmaf_v1.0.16_5d0h`.
 
 Le opzioni `SCALE_HEIGHT`, `PRESET`, `CRF`, `AUDIO_BITRATE`, `LOCAL_CPUS`,
 `PROGRESS_INTERVAL`, `OUTPUT_DIR`, `OVERWRITE` e `FFMPEG_IMAGE` funzionano come
-nelle varianti documentate sopra.
+nelle varianti documentate sopra. `KEYINT_SECONDS` (default 10) fissa la
+distanza fra keyframe in secondi: lo script la converte in frame dal frame rate
+del sorgente, quindi `-g 600` a 60 fps e `-g 240` a 23.976; con `0` o un frame
+rate non leggibile resta `-g 240`. Come l'applicazione, lo script riduce ogni
+traccia audio a stereo prima di libopus e marca BT.709 le sorgenti HD senza tag
+colore.

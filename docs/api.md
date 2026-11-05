@@ -102,11 +102,23 @@ dimensione originale, cioè nessun ridimensionamento e rapporto dei pixel del
 sorgente conservato. Sono ammessi `0` e i valori fra 16 e 4320; l'interfaccia
 web propone un sottoinsieme di valori comuni, l'API accetta tutto l'intervallo.
 
+`params.keyint_seconds` (default `10`) è la distanza fra keyframe in secondi: il
+backend la converte in frame dal frame rate del sorgente,
+`round(fps × keyint_seconds)`. Sono ammessi i valori fra 0 e 60. Con `0` vale
+`params.keyint`, in frame (default `240`, fra 1 e 3000), usato anche quando il
+frame rate del sorgente non è rilevabile.
+
 `params.measure_vmaf` abilita la misura VMAF dopo la conversione (default
 `false`). `params.vmaf_model` seleziona il modello built-in di libvmaf (default
 `vmaf_v1.0.16_5d0h`). Il nome del modello deve contenere solo caratteri sicuri;
 un valore non valido viene rifiutato con `400`. La misura è un passaggio ffmpeg
 aggiuntivo e non modifica l'output pubblicato.
+
+Con un sorgente da 45 fps in su, un modello v1 (`vmaf_v1.0.16_5d0h`,
+`_3d0h`, `_3d0h_2160`, `_1d5h_2160`) viene sostituito dalla sua variante
+`_hfr_`, tarata su 50/60 fps; misura e analisi usano lo stesso modello. Gli
+altri modelli restano invariati. `files[].vmaf.model` e
+`files[].vmaf_analysis.modello` riportano il modello effettivamente usato.
 
 `params.mode` può essere `crf` (qualità costante), `target_size` (VBR a due
 passaggi) oppure `vmaf_analysis` (analisi preliminare su spezzoni, seguita dalla
@@ -244,7 +256,7 @@ Log di conversione del file, nello stesso formato degli script bash.
   "file_id": "ad1c9172-...",
   "lines": [
     "2026-07-25T21:31:47Z Avvio conversione: stagione1/ep01.mp4",
-    "2026-07-25T21:31:48Z Sorgente: durata 120.00s, 3000 frame stimati, audio presente",
+    "2026-07-25T21:31:48Z Sorgente: durata 120.00s, 3000 frame stimati, 1 traccia audio",
     "2026-07-25T21:31:53Z [Codifica]  42.3% | 00:00:51 / 00:02:00 | frame 1275 | file 12.40 MB | 1234kbits/s | 2.1x | ETA 00:00:33"
   ]
 }

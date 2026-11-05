@@ -5,8 +5,9 @@ use std::path::Path;
 
 use anyhow::{bail, Result};
 
-use crate::config::EncodingParams;
+use crate::config::{fps_plausibile, EncodingParams};
 use crate::ffmpeg::encode::video_encoder_args;
+use crate::ffmpeg::probe::MediaInfo;
 use crate::models::{MotivoScelta, RisultatoCrf, VmafAnalysis};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -71,8 +72,36 @@ pub fn crf_da_testare(crf_di_partenza: u8, step: u32) -> Vec<u8> {
         .collect()
 }
 
+/// Frame rate da cui si passa alla variante HFR dei modelli VMAF v1.
+const FPS_HFR: f64 = 45.0;
+
+/// Varianti v1 che libvmaf offre anche in versione `_hfr_`.
+const VARIANTI_CON_HFR: [&str; 4] = ["5d0h", "3d0h", "3d0h_2160", "1d5h_2160"];
+
+/// Modello VMAF da usare per un sorgente.
+///
+/// I modelli v1 hanno una variante `_hfr_` tarata sui contenuti a 50/60 fps.
+/// Su un 60 fps il modello standard dà circa 0,75 punti in meno della variante
+/// HFR, quindi l'analisi scarterebbe CRF che in realtà raggiungono il target e
+/// produrrebbe file più grandi del necessario. Dai 45 fps in su il modello v1
+/// configurato passa alla sua variante HFR; gli altri modelli, e quelli già
+/// HFR, restano come sono. Un frame rate non plausibile vale come assente,
+/// come per il GOP.
+pub fn modello_vmaf_effettivo(modello: &str, frame_rate: Option<(u64, u64)>) -> String {
+    let alto_frame_rate = fps_plausibile(frame_rate).is_some_and(|fps| fps >= FPS_HFR);
+    match modello.strip_prefix("vmaf_v1.0.16_") {
+        Some(variante) if alto_frame_rate && VARIANTI_CON_HFR.contains(&variante) => {
+            format!("vmaf_v1.0.16_hfr_{variante}")
+        }
+        _ => modello.to_string(),
+    }
+}
+
 pub struct SondaRequest<'a> {
     pub params: &'a EncodingParams,
+    /// Sorgente sondato: serve al GOP, che deve restare quello della codifica
+    /// finale.
+    pub info: &'a MediaInfo,
     pub input: &'a Path,
     pub output_mkv: &'a Path,
     pub segmento: &'a SegmentoAnalisi,
@@ -103,7 +132,7 @@ pub fn build_probe_args(request: &SondaRequest<'_>) -> Vec<OsString> {
         "0:v:0".into(),
         "-an".into(),
     ];
-    args.extend(video_encoder_args(request.params));
+    args.extend(video_encoder_args(request.params, request.info));
     args.extend([
         "-b:v".into(),
         "0".into(),
@@ -133,6 +162,11 @@ pub struct VmafRequest<'a> {
     /// Geometria del distorto, presente solo quando differisce da quella del
     /// sorgente: libvmaf confronta solo immagini della stessa dimensione.
     pub scale_to: Option<(u32, u32)>,
+    /// `setparams` che la codifica ha aggiunto al distorto (vedi
+    /// `color_tag_filter`). Il riferimento riceve gli stessi tag: con tag
+    /// diversi FFmpeg 9 converte uno dei due rami prima di libvmaf e il
+    /// punteggio crolla anche a pixel identici.
+    pub tag_colore: Option<&'a str>,
     pub progress_interval: f64,
 }
 
@@ -146,11 +180,20 @@ pub fn build_vmaf_args(request: &VmafRequest<'_>) -> Vec<OsString> {
             ",scale=w={width}:h={height}:flags=bicubic:reset_sar=1"
         ));
     }
+    if let Some(tag_colore) = request.tag_colore {
+        reference_branch.push(',');
+        reference_branch.push_str(tag_colore);
+    }
     // Le basi tempi vengono allineate perché MP4 e sorgente possono usare timebase diverse.
     // format porta entrambi i rami a profondità e formato accettati da libvmaf.
     reference_branch.push_str(&format!(",format={}[ref]", request.pixel_format));
+    // Il Matroska intermedio arrotonda i timestamp al millisecondo: a 24, 30 o
+    // 60 fps un frame su tre del distorto cade poco prima del suo gemello nel
+    // riferimento, e la sincronizzazione di default di libvmaf lo confronta con
+    // il frame precedente. Su un 60 fps il punteggio scendeva da 96,5 a 76,2.
+    // `nearest` abbina il frame del riferimento più vicino nel tempo.
     let mut filter = format!(
-        "[0:v]settb=AVTB,setpts=PTS-STARTPTS,format={}[dist];{};[dist][ref]libvmaf=model=version={}:log_fmt=json:log_path={}",
+        "[0:v]settb=AVTB,setpts=PTS-STARTPTS,format={}[dist];{};[dist][ref]libvmaf=model=version={}:log_fmt=json:log_path={}:ts_sync_mode=nearest",
         request.pixel_format,
         reference_branch,
         request.model,
@@ -316,6 +359,7 @@ mod tests {
             riferimento_inizio: None,
             riferimento_durata: None,
             scale_to,
+            tag_colore: None,
             progress_interval: 5.0,
         }
     }
@@ -349,12 +393,74 @@ mod tests {
     }
 
     #[test]
+    fn il_riferimento_riceve_gli_stessi_tag_colore_del_distorto() {
+        let tag = "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709";
+        let filter = filter(&build_vmaf_args(&VmafRequest {
+            tag_colore: Some(tag),
+            ..request(Some((854, 480)), None)
+        }));
+        let (distorted, reference) = filter.split_once(';').unwrap();
+        assert!(!distorted.contains("setparams"));
+        // Dopo la scala, come nella catena di codifica.
+        assert!(reference.contains(&format!("reset_sar=1,{tag},format=yuv420p10le[ref]")));
+    }
+
+    #[test]
+    fn ad_alto_frame_rate_si_usa_la_variante_hfr() {
+        for (modello, atteso) in [
+            ("vmaf_v1.0.16_5d0h", "vmaf_v1.0.16_hfr_5d0h"),
+            ("vmaf_v1.0.16_3d0h", "vmaf_v1.0.16_hfr_3d0h"),
+            ("vmaf_v1.0.16_3d0h_2160", "vmaf_v1.0.16_hfr_3d0h_2160"),
+            ("vmaf_v1.0.16_1d5h_2160", "vmaf_v1.0.16_hfr_1d5h_2160"),
+        ] {
+            assert_eq!(modello_vmaf_effettivo(modello, Some((60000, 1001))), atteso);
+            assert_eq!(modello_vmaf_effettivo(modello, Some((50, 1))), atteso);
+        }
+    }
+
+    #[test]
+    fn sotto_i_45_fps_o_senza_frame_rate_plausibile_il_modello_resta_quello_configurato() {
+        for frame_rate in [
+            Some((24000, 1001)),
+            Some((25, 1)),
+            Some((30, 1)),
+            Some((90000, 1)),
+            None,
+        ] {
+            assert_eq!(
+                modello_vmaf_effettivo("vmaf_v1.0.16_5d0h", frame_rate),
+                "vmaf_v1.0.16_5d0h"
+            );
+        }
+    }
+
+    #[test]
+    fn i_modelli_senza_variante_hfr_non_cambiano() {
+        for modello in [
+            "vmaf_v0.6.1",
+            "vmaf_v0.6.1neg",
+            "vmaf_4k_v0.6.1",
+            "vmaf_v1.0.16_hfr_5d0h",
+            "vmaf_v1.0.16_sconosciuto",
+        ] {
+            assert_eq!(modello_vmaf_effettivo(modello, Some((60, 1))), modello);
+        }
+    }
+
+    #[test]
     fn il_modello_e_il_log_finiscono_nel_filtro_libvmaf() {
         let filter = filter(&build_vmaf_args(&request(None, None)));
         assert!(filter.contains("format=yuv420p10le[ref];[dist][ref]libvmaf"));
         assert!(filter.contains("libvmaf=model=version=vmaf_v1.0.16_5d0h"));
         assert!(filter.contains("log_fmt=json"));
         assert!(filter.contains("log_path=vmaf.json"));
+    }
+
+    #[test]
+    fn i_frame_sono_abbinati_al_timestamp_piu_vicino() {
+        let filter = filter(&build_vmaf_args(&request(None, Some(4))));
+        assert!(filter.contains(":ts_sync_mode=nearest"), "{filter}");
+        assert!(filter.ends_with(":n_threads=4"), "{filter}");
     }
 
     #[test]
@@ -443,6 +549,18 @@ mod tests {
     fn probe_request() -> SondaRequest<'static> {
         SondaRequest {
             params: Box::leak(Box::new(EncodingParams::default())),
+            info: Box::leak(Box::new(MediaInfo {
+                duration_seconds: 600.0,
+                frame_rate: Some((60, 1)),
+                estimated_frames: 36_000,
+                audio_streams: 1,
+                source_audio_bitrate_bps: None,
+                width: Some(1920),
+                height: Some(1080),
+                color_space: None,
+                color_primaries: None,
+                color_transfer: None,
+            })),
             input: Path::new("source.mp4"),
             output_mkv: Path::new("probe.mkv"),
             segmento: Box::leak(Box::new(SegmentoAnalisi {
@@ -467,6 +585,10 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair == [OsString::from("-crf"), OsString::from("44")]));
+        // Stesso GOP della codifica finale: 10 s a 60 fps.
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == [OsString::from("-g"), OsString::from("600")]));
         assert_eq!(args.last().unwrap(), "probe.mkv");
         assert!(args.contains(&OsString::from("-vf")));
     }

@@ -13,7 +13,7 @@ nessun servizio esterno obbligatorio.
 | `store`            | persistenza: un JSON per job, scritto in modo atomico                  |
 | `state`            | `AppState`: registro dei job, percorsi, mutazioni, ripristino a caldo  |
 | `worker`           | esecuzione dei job: probe, codifica, remux, stati finali              |
-| `ffmpeg::probe`    | `ffprobe` in JSON → durata, frame rate, frame stimati, presenza audio  |
+| `ffmpeg::probe`    | `ffprobe` in JSON → durata, frame rate, frame stimati, tracce audio    |
 | `ffmpeg::encode`   | righe di comando ffmpeg ed esecuzione con progresso e cancellazione    |
 | `ffmpeg::progress` | parser del flusso `-progress` e formattazione delle righe di log       |
 | `joblog`           | log di conversione per file: buffer circolare + append su disco        |
@@ -26,14 +26,22 @@ nessun servizio esterno obbligatorio.
 
 Riproduce `start_av1_docker.sh`, senza la parte SSH:
 
-1. **`ffprobe`** → durata e `avg_frame_rate`, da cui i frame stimati. Un sorgente
-   senza durata valida o senza stream video fallisce subito.
+1. **`ffprobe`** → durata e `avg_frame_rate`, da cui i frame stimati, più
+   geometria, tag colore e numero di tracce audio. Un sorgente senza durata
+   valida o senza stream video fallisce subito.
 2. **Codifica** in Matroska temporaneo con `libsvtav1`:
-   `-b:v 0 -crf N -preset P -svtav1-params ... -g 240 -pix_fmt yuv420p10le`,
-   audio `libopus`, filtro
-   `scale=-2:trunc(min(H\,ih)/2)*2:reset_sar=1`.
+   `-b:v 0 -crf N -preset P -svtav1-params ... -g G -pix_fmt yuv420p10le`,
+   con `G = round(fps × keyint_seconds)`, cioè 10 s di GOP a ogni frame rate,
+   audio `libopus` dopo il downmix `aformat=channel_layouts=mono|stereo`, filtro
+   `scale=-2:trunc(min(H\,ih)/2)*2:reset_sar=1`. Se il sorgente è HD e non
+   dichiara lo spazio colore, la catena `-vf` termina con un `setparams` che
+   aggiunge i tag BT.709 mancanti senza toccare i pixel; la misura VMAF mette
+   gli stessi tag sul ramo di riferimento, altrimenti FFmpeg 9 convertirebbe uno
+   dei due rami prima di libvmaf.
    In modalità `target_size` due passaggi (`-pass 1` / `-pass 2`) con `-b:v`
    calcolato dal target.
+   Le misure dietro queste scelte (GOP, downmix, tag colore, opzioni di SVT-AV1
+   escluse) sono in [qualita-codifica.md](qualita-codifica.md).
 3. **Remux** in MP4 senza ricodifica: `-c copy -tag:v av01 -movflags +faststart`.
 4. **Rinomina atomica** del temporaneo nella cartella di output: il file finale
    compare solo quando è completo e valido.
@@ -127,5 +135,6 @@ tema chiaro/scuro via `prefers-color-scheme`.
 - **End-to-end** (`cargo test --test e2e_conversion`): conversioni reali con
   ffmpeg, dall'upload al download — CRF, dimensione target, sequenzialità con
   `concurrency = 1`, stop a metà codifica, salto dell'output esistente,
-  fallimento isolato di un sorgente non valido. Se manca un ffmpeg con
-  `libsvtav1` i test si autoescludono con un messaggio.
+  fallimento isolato di un sorgente non valido, downmix di un AC3 5.1, GOP di
+  10 s a 60 fps, tag BT.709 su un HD senza tag, modello VMAF HFR a 60 fps. Se
+  manca un ffmpeg con `libsvtav1` i test si autoescludono con un messaggio.

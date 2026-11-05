@@ -10,6 +10,7 @@ parte SSH: ffmpeg viene eseguito nello stesso container del servizio.
 
 - **Documentazione API**: [docs/api.md](docs/api.md)
 - **Architettura**: [docs/architettura.md](docs/architettura.md)
+- **Qualità di codifica**: [docs/qualita-codifica.md](docs/qualita-codifica.md)
 - **Immagine ffmpeg**: [README.image.md](README.image.md)
 
 ## Funzionalità
@@ -151,6 +152,7 @@ poter configurare il container senza montare un TOML. Le più usate:
 | `AV1WC_PRESET`             | preset SVT-AV1 di default                          |
 | `AV1WC_SCALE_HEIGHT`       | altezza massima dell'output; `0` = dimensione originale |
 | `AV1WC_SVTAV1_PARAMS`      | `-svtav1-params` di default                        |
+| `AV1WC_KEYINT_SECONDS`     | GOP in secondi, convertito in frame dal frame rate del sorgente; `0` = `keyint` fisso |
 | `AV1WC_MEASURE_VMAF`       | abilita la misura VMAF (`true`/`false`)            |
 | `AV1WC_VMAF_MODEL`         | modello VMAF di default                           |
 | `AV1WC_VMAF_SEGMENTS`      | segmenti analizzati in modalità VMAF              |
@@ -168,9 +170,9 @@ Usa `crf` e `svtav1_params`.
 
 **`target_size` — dimensione finale desiderata.** VBR a due passaggi. Il bitrate
 video è calcolato sottraendo dal target il margine per l'overhead MP4
-(`size_margin_percent`) e lo spazio della traccia audio Opus. La dimensione è un
-obiettivo, non un limite rigido: per un vincolo stretto alzare il margine (es.
-`size_margin_percent = 2`).
+(`size_margin_percent`) e lo spazio dell'audio Opus, una quota di `audio_bitrate`
+per ogni traccia del sorgente. La dimensione è un obiettivo, non un limite
+rigido: per un vincolo stretto alzare il margine (es. `size_margin_percent = 2`).
 
 **`vmaf_analysis` — Analisi VMAF + Qualità Costante.** Parte dal `crf` impostato,
 prova CRF crescenti di 2 in 2 su spezzoni casuali della durata configurata e usa per la
@@ -179,7 +181,8 @@ conversione il CRF più alto che mantiene il VMAF medio almeno pari a
 soglia viene usato il CRF impostato. Fuori da questa modalità non vengono eseguite
 sonde aggiuntive.
 
-Default rilevanti, ereditati dalle misure documentate in `README.image.md`:
+Default rilevanti, ereditati dalle misure documentate in `README.image.md` e in
+[docs/qualita-codifica.md](docs/qualita-codifica.md):
 
 - `svtav1_params = "tune=5"`, ottimizzato per la qualità percettiva VMAF (95,076
   contro 92,810 di `tune=0` a pari bitrate). `tune=0` conserva un PSNR superiore
@@ -189,6 +192,30 @@ Default rilevanti, ereditati dalle misure documentate in `README.image.md`:
   VBR a due passaggi.
   `tune=5` richiede inoltre SVT-AV1 4.x, quello dell'immagine custom.
 - `enable-qm=1:qm-min=0` resta escluso: nei test riduceva sia SSIM sia PSNR.
+- Restano escluse anche `enable-variance-boost=1` e le altre opzioni
+  psicovisive di SVT-AV1 4.2 (`qp-scale-compress-strength`, `tf-strength`,
+  `ac-bias`, `sharpness`): a parità di CRF ingrandivano il file dal 43 al 56%, e
+  a parità di dimensione guadagnavano solo su XPSNR: SSIMULACRA2 restava in
+  pari e VMAF perdeva dal 4 al 16%.
+- `film-grain=8` non è un default ma si può impostare per job
+  (`svtav1_params = "tune=5:film-grain=8"`) su sorgenti con banding evidente,
+  come cieli, gradienti e scene scure: nelle misure elimina il banding al costo
+  di circa il 19% di file in più, fino al 41% su una scena statica. In modalità
+  `target_size` non ha effetto, perché i parametri diventano `tune=0`.
+- `keyint_seconds = 10`: un keyframe ogni 10 secondi, convertiti in frame dal
+  frame rate del sorgente (`-g 600` a 60 fps, `-g 240` a 23,976 fps). Un GOP più
+  corto spende bit senza migliorare la qualità: a parità di CRF un GOP da 4 s
+  ingrandiva il file dal 4 al 34%. Con `0` vale il valore fisso `keyint` (240
+  frame), usato anche quando il frame rate non è rilevabile. Un `keyint=` dentro
+  `svtav1_params` ha la precedenza su entrambi.
+- Le sorgenti HD (almeno 1280 pixel di larghezza o 720 di altezza) che non
+  dichiarano lo spazio colore vengono marcate BT.709. Senza tag i player
+  scelgono la matrice dalla risoluzione dell'output, quindi un HD ridotto a 480p
+  verrebbe mostrato come BT.601, con rossi e verdi spostati. Il tag è applicato
+  con `setparams`, che cambia i metadati senza toccare i pixel. Si aggiungono
+  solo i tag mancanti, e solo se quelli presenti sono già BT.709: le sorgenti SD,
+  BT.601, BT.2020 o HDR restano come sono. La misura VMAF applica gli stessi tag
+  al riferimento, perché tag diversi falserebbero il punteggio.
 - Il ridimensionamento limita l'altezza a `scale_height` mantenendo l'aspetto
   visivo del sorgente e normalizzando a pixel quadrati (SAR 1:1), per evitare DAR
   errati con sorgenti anamorfiche. Con `scale_height = 0` non viene applicato
@@ -221,9 +248,23 @@ parità di file, perché su schermo piccolo gli artefatti si vedono meno; punteg
 ottenuti con modelli diversi non sono confrontabili. Il modello si può impostare
 con `AV1WC_VMAF_MODEL`.
 
+Con un sorgente da 45 fps in su, un modello v1 passa da solo alla sua variante
+`_hfr_` (per esempio `vmaf_v1.0.16_hfr_5d0h`), tarata su 50/60 fps. Su un clip
+a 60 fps il modello standard dà circa 0,75 punti in meno della variante HFR:
+in modalità `vmaf_analysis` scarterebbe CRF che raggiungono il target,
+producendo file più grandi del necessario. Il log del file segnala il cambio e
+il risultato riporta il modello effettivamente usato.
+
 Il confronto avviene alla risoluzione di uscita: quando l'output è ridimensionato,
 il sorgente viene riscalato alla stessa geometria. Il punteggio misura quindi la
 perdita da compressione e non quella dovuta al ridimensionamento.
+
+Ogni frame dell'output è confrontato con il frame del sorgente più vicino nel
+tempo (`ts_sync_mode=nearest`). Il Matroska intermedio arrotonda i timestamp al
+millisecondo e, con la sincronizzazione di default, a 24, 30 o 60 fps un frame su
+tre veniva confrontato con il frame precedente: su un clip a 60 fps il VMAF
+risultava 76,2 invece di 96,5, e l'analisi sceglieva CRF più bassi del
+necessario o ripiegava sul CRF impostato.
 
 Esempio di job con misura attiva:
 
@@ -401,4 +442,6 @@ Oggi il formato previsto è MP4. La lista `jobs.allowed_extensions` include già
 altri contenitori (`mov`, `mkv`, `avi`, `webm`, `m4v`, `ts`, `mpg`, `mpeg`,
 `wmv`): l'input viene passato a ffmpeg senza assunzioni sul contenitore, quindi
 per abilitarne altri basta aggiungerli in configurazione. L'output è sempre MP4
-con video AV1 e audio Opus.
+con video AV1 e audio Opus. Ogni traccia audio viene ridotta a stereo, il mono
+resta mono: libopus rifiuta il 5.1(side) di AC3, E-AC3 e DTS, e a 48 kbit/s uno
+stereo suona meglio di sei canali compressi.

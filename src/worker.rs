@@ -13,18 +13,18 @@ use futures::StreamExt;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::config::{EncodingMode, EncodingParams};
+use crate::config::{fps_plausibile, EncodingMode, EncodingParams};
 use crate::error::{ApiError, ApiResult};
 use crate::events::Event;
 use crate::ffmpeg::encode::{
-    build_crf_args, build_remux_args, build_two_pass_args, compute_video_bitrate, run_ffmpeg,
-    total_passes, FfmpegEvent, RunOutcome,
+    build_crf_args, build_remux_args, build_two_pass_args, color_tag_filter, compute_video_bitrate,
+    run_ffmpeg, total_passes, FfmpegEvent, RunOutcome,
 };
 use crate::ffmpeg::probe::probe;
 use crate::ffmpeg::progress::{format_clock, format_progress_line, format_size, ProgressParser};
 use crate::ffmpeg::vmaf::{
-    build_probe_args, build_vmaf_args, crf_da_testare, parse_vmaf_log, righe_riepilogo, scegli_crf,
-    segmenti_da_analizzare, SondaRequest, VmafRequest,
+    build_probe_args, build_vmaf_args, crf_da_testare, modello_vmaf_effettivo, parse_vmaf_log,
+    righe_riepilogo, scegli_crf, segmenti_da_analizzare, SondaRequest, VmafRequest,
 };
 use crate::models::{
     FileStatus, Job, JobStatus, RisultatoCrf, SegmentoAnalisiPersistito, VmafAnalysis,
@@ -229,17 +229,40 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
         job_id,
         file_id,
         &format!(
-            "Sorgente: durata {:.2}s, {} frame stimati, audio {}",
+            "Sorgente: durata {:.2}s, {} frame stimati, {}",
             info.duration_seconds,
             info.estimated_frames,
-            if info.has_audio {
-                "presente"
-            } else {
-                "assente"
+            match info.audio_streams {
+                0 => "audio assente".to_string(),
+                1 => "1 traccia audio".to_string(),
+                n => format!("{n} tracce audio"),
             }
         ),
     )
     .await;
+    let gop = params.effective_keyint(info.frame_rate);
+    log_line(
+        state,
+        job_id,
+        file_id,
+        &match fps_plausibile(info.frame_rate) {
+            Some(fps) => format!(
+                "Keyframe ogni {gop} fotogrammi ({:.1} s a {fps:.3} fps)",
+                f64::from(gop) / fps
+            ),
+            None => format!("Keyframe ogni {gop} fotogrammi (frame rate assente o non plausibile)"),
+        },
+    )
+    .await;
+    if let Some(filter) = color_tag_filter(&info) {
+        log_line(
+            state,
+            job_id,
+            file_id,
+            &format!("Sorgente HD senza tag colore: dichiarato BT.709 ({filter})"),
+        )
+        .await;
+    }
 
     let temp_dir = state.temp_dir();
     tokio::fs::create_dir_all(&temp_dir)
@@ -316,7 +339,7 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
         };
         let args = match params_codifica.mode {
             EncodingMode::Crf | EncodingMode::VmafAnalysis => {
-                build_crf_args(&params_codifica, &input_path, &temp_mkv)
+                build_crf_args(&params_codifica, &info, &input_path, &temp_mkv)
             }
             EncodingMode::TargetSize => {
                 let bitrate = compute_video_bitrate(&params_codifica, &info)?;
@@ -335,6 +358,7 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
                 }
                 build_two_pass_args(
                     &params_codifica,
+                    &info,
                     &input_path,
                     &temp_mkv,
                     &passlog,
@@ -464,6 +488,10 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
     Ok(())
 }
 
+fn nota_modello_hfr(effettivo: &str, configurato: &str) -> String {
+    format!("Sorgente ad alto frame rate: modello VMAF {effettivo} al posto di {configurato}")
+}
+
 // Il contesto comprende sorgente, output, temporanei e canale di cancellazione
 // perché la misura deve restare un passaggio isolato e tollerante agli errori.
 #[allow(clippy::too_many_arguments)]
@@ -480,7 +508,7 @@ async fn measure_vmaf(
     cancel: &mut tokio::sync::watch::Receiver<bool>,
 ) -> VmafMeasurement {
     let started = std::time::Instant::now();
-    let model = params.vmaf_model.clone();
+    let model = modello_vmaf_effettivo(&params.vmaf_model, source_info.frame_rate);
     let error_measurement = |error: String, duration_seconds: f64| VmafMeasurement {
         model: model.clone(),
         duration_seconds,
@@ -495,6 +523,15 @@ async fn measure_vmaf(
         "Misura VMAF dell'output rispetto al sorgente",
     )
     .await;
+    if model != params.vmaf_model {
+        log_line(
+            state,
+            handle.id,
+            file_id,
+            &nota_modello_hfr(&model, &params.vmaf_model),
+        )
+        .await;
+    }
 
     let output_info = match probe(&state.config.ffmpeg.ffprobe_bin, output_path).await {
         Ok(info) => info,
@@ -511,6 +548,7 @@ async fn measure_vmaf(
         }
     };
 
+    let tag_colore = color_tag_filter(source_info);
     let scale_to = match (
         output_info.width,
         output_info.height,
@@ -538,12 +576,13 @@ async fn measure_vmaf(
         distorted: output_path,
         reference: input_path,
         log_json,
-        model: &params.vmaf_model,
+        model: &model,
         pixel_format: &params.pixel_format,
         threads: params.cpus,
         riferimento_inizio: None,
         riferimento_durata: None,
         scale_to,
+        tag_colore: tag_colore.as_deref(),
         progress_interval: params.progress_interval,
     };
     let args = build_vmaf_args(&request);
@@ -669,6 +708,16 @@ async fn analizza_file(
             durata_secondi: segmento.durata_secondi,
         })
         .collect::<Vec<_>>();
+    let modello = modello_vmaf_effettivo(&params.vmaf_model, info.frame_rate);
+    if modello != params.vmaf_model {
+        log_line(
+            state,
+            job_id,
+            file_id,
+            &nota_modello_hfr(&modello, &params.vmaf_model),
+        )
+        .await;
+    }
     log_line(
         state,
         job_id,
@@ -683,7 +732,7 @@ async fn analizza_file(
                 .join(", "),
             crf_candidati,
             params.vmaf_target,
-            params.vmaf_model
+            modello
         ),
     )
     .await;
@@ -709,6 +758,7 @@ async fn analizza_file(
         .await;
     }
 
+    let tag_colore = color_tag_filter(info);
     let mut risultati = Vec::with_capacity(crf_candidati.len());
     let mut passo = 0u32;
     for &crf in crf_candidati {
@@ -722,6 +772,7 @@ async fn analizza_file(
             passo += 1;
             let probe_request = SondaRequest {
                 params,
+                info,
                 input: input_path,
                 output_mkv: sonda_mkv,
                 segmento,
@@ -800,12 +851,13 @@ async fn analizza_file(
                 distorted: sonda_mkv,
                 reference: input_path,
                 log_json: sonda_vmaf_json,
-                model: &params.vmaf_model,
+                model: &modello,
                 pixel_format: &params.pixel_format,
                 threads: params.cpus,
                 riferimento_inizio: Some(segmento.inizio_secondi),
                 riferimento_durata: Some(segmento.durata_secondi),
                 scale_to,
+                tag_colore: tag_colore.as_deref(),
                 progress_interval: params.progress_interval,
             };
             let vmaf_args = build_vmaf_args(&request);
@@ -932,7 +984,7 @@ async fn analizza_file(
         crf_scelto,
         crf_di_partenza: params.crf,
         target: params.vmaf_target,
-        modello: params.vmaf_model.clone(),
+        modello: modello.clone(),
         motivo,
         segmenti: segmenti_persistiti,
         risultati,

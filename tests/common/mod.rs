@@ -127,13 +127,19 @@ pub fn ffmpeg_with_libvmaf() -> bool {
 
 /// Genera un MP4 di prova con traccia video e audio.
 pub fn make_test_video(path: &Path, seconds: u32) {
+    make_test_video_at(path, seconds, 10, "640x360");
+}
+
+/// Come `make_test_video`, con frame rate e dimensione indicati. Il video
+/// mpeg4 generato non dichiara tag colore.
+pub fn make_test_video_at(path: &Path, seconds: u32, fps: u32, size: &str) {
     let status = std::process::Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error", "-y"])
         .args([
             "-f",
             "lavfi",
             "-i",
-            &format!("testsrc=duration={seconds}:size=640x360:rate=10"),
+            &format!("testsrc=duration={seconds}:size={size}:rate={fps}"),
         ])
         .args([
             "-f",
@@ -168,6 +174,134 @@ pub fn make_anamorphic_video(path: &Path, seconds: u32) {
         status.success(),
         "ffmpeg non ha generato il video anamorfico"
     );
+}
+
+/// Genera un MP4 con audio AC3 5.1(side), il layout di DVD e broadcast che
+/// libopus non accetta così com'è.
+pub fn make_surround_video(path: &Path, seconds: u32) {
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y"])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("testsrc=duration={seconds}:size=640x360:rate=10"),
+        ])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("sine=frequency=440:duration={seconds}"),
+        ])
+        .args(["-af", "pan=5.1(side)|FL=c0|FR=c0|FC=c0|LFE=c0|SL=c0|SR=c0"])
+        .args(["-c:v", "mpeg4", "-q:v", "5", "-c:a", "ac3", "-b:a", "384k"])
+        .arg(path)
+        .status()
+        .expect("generazione video con audio 5.1");
+    assert!(
+        status.success(),
+        "ffmpeg non ha generato il video con audio 5.1"
+    );
+}
+
+/// Tracce audio di un file come "codec,canali,layout", secondo ffprobe.
+pub fn audio_streams(path: &Path) -> Vec<String> {
+    let output = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=codec_name,channels,channel_layout",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .expect("ffprobe sulle tracce audio");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| line.trim().trim_end_matches(',').to_string())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// Tag colore del primo stream video: "range,matrice,primari,trasferimento".
+pub fn color_tags(path: &Path) -> String {
+    let output = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=color_range,color_space,color_primaries,color_transfer",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .expect("ffprobe sui tag colore");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// VMAF medio calcolato direttamente con ffmpeg, con i filtri indicati in
+/// testa a ciascun ramo.
+pub fn vmaf_score(
+    distorted: &Path,
+    distorted_filters: &str,
+    reference: &Path,
+    reference_filters: &str,
+    model: &str,
+) -> f64 {
+    let log = distorted.with_extension("verifica.json");
+    // Abbina i frame per indice, senza dipendere dai timestamp: è il confronto
+    // di riferimento per la sincronizzazione usata dall'applicazione.
+    let graph = format!(
+        "[0:v]settb=AVTB,setpts=N,{distorted_filters}format=yuv420p10le[dist];\
+         [1:v]settb=AVTB,setpts=N,{reference_filters}format=yuv420p10le[ref];\
+         [dist][ref]libvmaf=model=version={model}:log_fmt=json:log_path={}",
+        log.display()
+    );
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i"])
+        .arg(distorted)
+        .arg("-i")
+        .arg(reference)
+        .args(["-lavfi", &graph, "-an", "-f", "null", "-"])
+        .status()
+        .expect("misura VMAF di verifica");
+    assert!(status.success(), "misura VMAF di verifica fallita");
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&log).expect("log VMAF di verifica")).unwrap();
+    json["pooled_metrics"]["vmaf"]["mean"].as_f64().unwrap()
+}
+
+/// Istanti dei keyframe del primo stream video, dai flag dei pacchetti: non
+/// serve decodificare.
+pub fn keyframe_times(path: &Path) -> Vec<f64> {
+    let output = std::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "packet=pts_time,flags",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .expect("ffprobe sui pacchetti");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (time, flags) = line.split_once(',')?;
+            flags.contains('K').then(|| time.parse().ok())?
+        })
+        .collect()
 }
 
 /// Geometria del primo stream video: larghezza, altezza, SAR, DAR.

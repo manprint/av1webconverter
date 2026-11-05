@@ -47,6 +47,52 @@ pub fn scale_filter(scale_height: u32) -> Option<String> {
     Some(format!("scale=-2:{height}:reset_sar=1"))
 }
 
+/// Dichiara BT.709 sulle sorgenti HD che non dichiarano lo spazio colore.
+///
+/// Senza tag i player scelgono la matrice dalla risoluzione dell'output:
+/// BT.709 in HD, BT.601 sotto. Un sorgente HD non taggato ridotto a 480p
+/// verrebbe mostrato con la matrice sbagliata, con rossi e verdi spostati.
+/// Per convenzione un HD senza tag è BT.709, quindi si aggiungono solo i tag
+/// mancanti, e solo se quelli presenti sono già BT.709: un sorgente BT.601,
+/// BT.2020 o HDR resta com'è.
+///
+/// `setparams` riscrive i metadati senza toccare i pixel. Le opzioni di output
+/// `-colorspace`/`-color_primaries`/`-color_trc` invece in FFmpeg 9 fanno
+/// convertire i pixel al filtro scale e taggano solo la matrice.
+pub fn color_tag_filter(info: &MediaInfo) -> Option<String> {
+    let hd = info.width.is_some_and(|width| width >= 1280)
+        || info.height.is_some_and(|height| height >= 720);
+    if !hd {
+        return None;
+    }
+    let tags = [
+        ("colorspace", &info.color_space),
+        ("color_primaries", &info.color_primaries),
+        ("color_trc", &info.color_transfer),
+    ];
+    if tags
+        .iter()
+        .any(|(_, value)| value.as_deref().is_some_and(|value| value != "bt709"))
+    {
+        return None;
+    }
+    let missing: Vec<String> = tags
+        .iter()
+        .filter(|(_, value)| value.is_none())
+        .map(|(option, _)| format!("{option}=bt709"))
+        .collect();
+    (!missing.is_empty()).then(|| format!("setparams={}", missing.join(":")))
+}
+
+/// Catena `-vf`: scala, poi tag colore. `None` se non serve alcun filtro.
+pub fn video_filter(params: &EncodingParams, info: &MediaInfo) -> Option<String> {
+    let filters: Vec<String> = [scale_filter(params.scale_height), color_tag_filter(info)]
+        .into_iter()
+        .flatten()
+        .collect();
+    (!filters.is_empty()).then(|| filters.join(","))
+}
+
 fn common_input_args(params: &EncodingParams, input: &Path) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec![
         "-nostdin".into(),
@@ -69,10 +115,10 @@ fn common_input_args(params: &EncodingParams, input: &Path) -> Vec<OsString> {
     args
 }
 
-pub(crate) fn video_encoder_args(params: &EncodingParams) -> Vec<OsString> {
+pub(crate) fn video_encoder_args(params: &EncodingParams, info: &MediaInfo) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec!["-c:v".into(), "libsvtav1".into()];
-    // Nessun filtro in modalità dimensione originale: -vf va omesso, non svuotato.
-    if let Some(filter) = scale_filter(params.scale_height) {
+    // Senza scala né tag colore -vf va omesso, non svuotato.
+    if let Some(filter) = video_filter(params, info) {
         args.push("-vf".into());
         args.push(filter.into());
     }
@@ -82,27 +128,51 @@ pub(crate) fn video_encoder_args(params: &EncodingParams) -> Vec<OsString> {
         "-svtav1-params".into(),
         params.effective_svtav1_params().into(),
         "-g".into(),
-        params.keyint.to_string().into(),
+        params.effective_keyint(info.frame_rate).to_string().into(),
         "-pix_fmt".into(),
         params.pixel_format.clone().into(),
     ]);
     args
 }
 
+/// Riduce ogni traccia audio a mono o stereo prima di libopus; il mono resta
+/// mono.
+///
+/// Serve per due motivi. libopus rifiuta il layout `5.1(side)` di AC3, E-AC3 e
+/// DTS ("Invalid channel layout 5.1(side) for specified mapping family -1"),
+/// quindi senza downmix il file intero fallisce. Inoltre 6-8 canali dentro
+/// 48 kbit/s suonano peggio di uno stereo allo stesso bitrate.
+pub const AUDIO_DOWNMIX_FILTER: &str = "aformat=channel_layouts=mono|stereo";
+
+fn audio_encoder_args(params: &EncodingParams) -> [OsString; 6] {
+    [
+        "-af".into(),
+        AUDIO_DOWNMIX_FILTER.into(),
+        "-c:a".into(),
+        "libopus".into(),
+        "-b:a".into(),
+        params.audio_bitrate.clone().into(),
+    ]
+}
+
 /// Codifica a qualità costante, un solo passaggio.
-pub fn build_crf_args(params: &EncodingParams, input: &Path, output_mkv: &Path) -> Vec<OsString> {
+pub fn build_crf_args(
+    params: &EncodingParams,
+    info: &MediaInfo,
+    input: &Path,
+    output_mkv: &Path,
+) -> Vec<OsString> {
     let mut args = common_input_args(params, input);
     args.extend(["-map".into(), "0:v:0".into(), "-map".into(), "0:a?".into()]);
-    args.extend(video_encoder_args(params));
+    args.extend(video_encoder_args(params, info));
     args.extend([
         "-b:v".into(),
         "0".into(),
         "-crf".into(),
         params.crf.to_string().into(),
-        "-c:a".into(),
-        "libopus".into(),
-        "-b:a".into(),
-        params.audio_bitrate.clone().into(),
+    ]);
+    args.extend(audio_encoder_args(params));
+    args.extend([
         "-f".into(),
         "matroska".into(),
         output_mkv.as_os_str().to_owned(),
@@ -114,6 +184,7 @@ pub fn build_crf_args(params: &EncodingParams, input: &Path, output_mkv: &Path) 
 /// scarta l'output e non tocca l'audio.
 pub fn build_two_pass_args(
     params: &EncodingParams,
+    info: &MediaInfo,
     input: &Path,
     output_mkv: &Path,
     passlogfile: &Path,
@@ -125,7 +196,7 @@ pub fn build_two_pass_args(
     if pass == 2 {
         args.extend(["-map".into(), "0:a?".into()]);
     }
-    args.extend(video_encoder_args(params));
+    args.extend(video_encoder_args(params, info));
     args.extend([
         "-b:v".into(),
         format!("{video_bitrate_bps}").into(),
@@ -146,11 +217,8 @@ pub fn build_two_pass_args(
             },
         ]);
     } else {
+        args.extend(audio_encoder_args(params));
         args.extend([
-            "-c:a".into(),
-            "libopus".into(),
-            "-b:a".into(),
-            params.audio_bitrate.clone().into(),
             "-f".into(),
             "matroska".into(),
             output_mkv.as_os_str().to_owned(),
@@ -182,7 +250,8 @@ pub fn build_remux_args(input_mkv: &Path, output_mp4: &Path) -> Vec<OsString> {
 }
 
 /// Bitrate video per centrare la dimensione richiesta: dal target si sottrae il
-/// margine per l'overhead del contenitore e lo spazio delle tracce audio.
+/// margine per l'overhead del contenitore e lo spazio delle tracce audio, una
+/// quota per ogni traccia perché ciascuna viene codificata al bitrate audio.
 pub fn compute_video_bitrate(params: &EncodingParams, info: &MediaInfo) -> Result<u64> {
     let target_mb = params
         .target_size_mb
@@ -193,15 +262,15 @@ pub fn compute_video_bitrate(params: &EncodingParams, info: &MediaInfo) -> Resul
 
     let target_bits = target_mb * 1_000_000.0 * 8.0;
     let usable_bits = target_bits * (1.0 - params.size_margin_percent / 100.0);
-    let audio_bits = if info.has_audio {
-        parse_bitrate(&params.audio_bitrate).unwrap_or(0) as f64 * info.duration_seconds
-    } else {
-        0.0
-    };
+    let audio_bits = parse_bitrate(&params.audio_bitrate).unwrap_or(0) as f64
+        * info.duration_seconds
+        * f64::from(info.audio_streams);
     let video_bits = usable_bits - audio_bits;
     if video_bits <= 0.0 {
         bail!(
-            "dimensione target troppo piccola: {target_mb} MB non bastano nemmeno per l'audio a {}",
+            "dimensione target troppo piccola: {target_mb} MB non bastano nemmeno per l'audio \
+             ({} × {})",
+            info.audio_streams,
             params.audio_bitrate
         );
     }
@@ -344,16 +413,110 @@ mod tests {
             .collect()
     }
 
-    fn info(duration: f64, has_audio: bool) -> MediaInfo {
+    fn info(duration: f64, audio_streams: u32) -> MediaInfo {
         MediaInfo {
             duration_seconds: duration,
             frame_rate: Some((25, 1)),
             estimated_frames: (duration * 25.0) as u64,
-            has_audio,
+            audio_streams,
             source_audio_bitrate_bps: None,
             width: Some(1920),
             height: Some(1080),
+            color_space: Some("bt709".into()),
+            color_primaries: Some("bt709".into()),
+            color_transfer: Some("bt709".into()),
         }
+    }
+
+    fn untagged(width: u32, height: u32) -> MediaInfo {
+        MediaInfo {
+            width: Some(width),
+            height: Some(height),
+            color_space: None,
+            color_primaries: None,
+            color_transfer: None,
+            ..info(60.0, 1)
+        }
+    }
+
+    const BT709: &str = "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709";
+
+    #[test]
+    fn un_hd_senza_tag_viene_dichiarato_bt709() {
+        assert_eq!(color_tag_filter(&untagged(1920, 1080)).unwrap(), BT709);
+        assert_eq!(color_tag_filter(&untagged(1280, 720)).unwrap(), BT709);
+        // Il 2.39:1 a 1280 di larghezza resta HD anche sotto i 720 righe.
+        assert_eq!(color_tag_filter(&untagged(1280, 536)).unwrap(), BT709);
+    }
+
+    #[test]
+    fn un_sd_senza_tag_resta_senza_tag() {
+        assert_eq!(color_tag_filter(&untagged(720, 576)), None);
+        assert_eq!(color_tag_filter(&untagged(1024, 576)), None);
+        let unknown = MediaInfo {
+            width: None,
+            height: None,
+            ..untagged(0, 0)
+        };
+        assert_eq!(color_tag_filter(&unknown), None);
+    }
+
+    #[test]
+    fn si_aggiungono_solo_i_tag_mancanti() {
+        let partial = MediaInfo {
+            color_space: Some("bt709".into()),
+            ..untagged(1920, 1080)
+        };
+        assert_eq!(
+            color_tag_filter(&partial).unwrap(),
+            "setparams=color_primaries=bt709:color_trc=bt709"
+        );
+        // Già completo: nessun filtro.
+        assert_eq!(color_tag_filter(&info(60.0, 1)), None);
+    }
+
+    #[test]
+    fn un_sorgente_con_altri_tag_non_viene_toccato() {
+        let hdr = MediaInfo {
+            color_space: Some("bt2020nc".into()),
+            color_transfer: Some("smpte2084".into()),
+            ..untagged(3840, 2160)
+        };
+        assert_eq!(color_tag_filter(&hdr), None);
+        let bt601 = MediaInfo {
+            color_space: Some("smpte170m".into()),
+            ..untagged(1920, 1080)
+        };
+        assert_eq!(color_tag_filter(&bt601), None);
+    }
+
+    #[test]
+    fn i_tag_colore_seguono_la_scala_nella_catena_vf() {
+        let params = EncodingParams::default();
+        let args = as_strings(&build_crf_args(
+            &params,
+            &untagged(1920, 1080),
+            Path::new("/in/a.mp4"),
+            Path::new("/tmp/a.mkv"),
+        ));
+        let index = args.iter().position(|arg| arg == "-vf").unwrap();
+        assert_eq!(
+            args[index + 1],
+            format!("scale=-2:trunc(min(480\\,ih)/2)*2:reset_sar=1,{BT709}")
+        );
+
+        let original = EncodingParams {
+            scale_height: 0,
+            ..EncodingParams::default()
+        };
+        let args = as_strings(&build_crf_args(
+            &original,
+            &untagged(1920, 1080),
+            Path::new("/in/a.mp4"),
+            Path::new("/tmp/a.mkv"),
+        ));
+        let index = args.iter().position(|arg| arg == "-vf").unwrap();
+        assert_eq!(args[index + 1], BT709);
     }
 
     #[test]
@@ -385,6 +548,7 @@ mod tests {
         };
         let args = as_strings(&build_crf_args(
             &params,
+            &info(60.0, 1),
             Path::new("/in/a.mp4"),
             Path::new("/tmp/a.mkv"),
         ));
@@ -403,6 +567,7 @@ mod tests {
         };
         let args = as_strings(&build_two_pass_args(
             &params,
+            &info(60.0, 1),
             Path::new("/in/a.mp4"),
             Path::new("/tmp/a.mkv"),
             Path::new("/tmp/a.log"),
@@ -418,6 +583,7 @@ mod tests {
         let params = EncodingParams::default();
         let args = build_crf_args(
             &params,
+            &info(60.0, 1),
             &PathBuf::from("/in/film.mp4"),
             &PathBuf::from("/tmp/out.mkv"),
         );
@@ -428,12 +594,35 @@ mod tests {
         assert!(joined.contains("-b:v 0 -crf 47"));
         assert!(joined.contains("-preset 1"));
         assert!(joined.contains("-svtav1-params tune=5"));
-        assert!(joined.contains("-g 240"));
+        // 25 fps per 10 s.
+        assert!(joined.contains("-g 250"));
         assert!(joined.contains("-pix_fmt yuv420p10le"));
-        assert!(joined.contains("-c:a libopus -b:a 48k"));
+        assert!(joined.contains("-af aformat=channel_layouts=mono|stereo -c:a libopus -b:a 48k"));
         assert!(joined.contains("-map 0:v:0 -map 0:a?"));
         assert!(joined.contains("-progress pipe:1"));
         assert!(joined.ends_with("-f matroska /tmp/out.mkv"));
+    }
+
+    #[test]
+    fn il_gop_segue_il_frame_rate_del_sorgente() {
+        let params = EncodingParams::default();
+        let gop = |frame_rate| {
+            let source = MediaInfo {
+                frame_rate,
+                ..info(60.0, 1)
+            };
+            let args = as_strings(&build_crf_args(
+                &params,
+                &source,
+                Path::new("/in/a.mp4"),
+                Path::new("/tmp/a.mkv"),
+            ));
+            let index = args.iter().position(|arg| arg == "-g").unwrap();
+            args[index + 1].clone()
+        };
+        assert_eq!(gop(Some((60, 1))), "600");
+        assert_eq!(gop(Some((24000, 1001))), "240");
+        assert_eq!(gop(None), "240");
     }
 
     #[test]
@@ -441,6 +630,7 @@ mod tests {
         let mut params = EncodingParams::default();
         assert!(!as_strings(&build_crf_args(
             &params,
+            &info(60.0, 1),
             Path::new("/in/a.mp4"),
             Path::new("/tmp/a.mkv")
         ))
@@ -448,6 +638,7 @@ mod tests {
         params.cpus = Some(4);
         let args = as_strings(&build_crf_args(
             &params,
+            &info(60.0, 1),
             Path::new("/in/a.mp4"),
             Path::new("/tmp/a.mkv"),
         ));
@@ -464,6 +655,7 @@ mod tests {
         };
         let args = as_strings(&build_two_pass_args(
             &params,
+            &info(60.0, 1),
             Path::new("/in/a.mp4"),
             Path::new("/tmp/a.mkv"),
             Path::new("/tmp/a.log"),
@@ -476,6 +668,7 @@ mod tests {
         assert!(joined.contains("-f null"));
         assert!(!joined.contains("libopus"));
         assert!(!joined.contains("0:a?"));
+        assert!(!args.iter().any(|arg| arg == "-af"));
         // tune=5 non è compatibile con il VBR a due passaggi.
         assert!(joined.contains("-svtav1-params tune=0"));
     }
@@ -489,6 +682,7 @@ mod tests {
         };
         let args = as_strings(&build_two_pass_args(
             &params,
+            &info(60.0, 1),
             Path::new("/in/a.mp4"),
             Path::new("/tmp/a.mkv"),
             Path::new("/tmp/a.log"),
@@ -497,7 +691,7 @@ mod tests {
         ));
         let joined = args.join(" ");
         assert!(joined.contains("-pass 2"));
-        assert!(joined.contains("-c:a libopus"));
+        assert!(joined.contains("-af aformat=channel_layouts=mono|stereo -c:a libopus"));
         assert!(joined.ends_with("-f matroska /tmp/a.mkv"));
     }
 
@@ -524,8 +718,22 @@ mod tests {
         };
         // 100 MB -> 800.000.000 bit, meno 1% -> 792.000.000, meno audio
         // (48.000 * 100 = 4.800.000) -> 787.200.000 su 100 s.
-        let bitrate = compute_video_bitrate(&params, &info(100.0, true)).unwrap();
+        let bitrate = compute_video_bitrate(&params, &info(100.0, 1)).unwrap();
         assert_eq!(bitrate, 7_872_000);
+    }
+
+    #[test]
+    fn bitrate_target_riserva_spazio_per_ogni_traccia_audio() {
+        let params = EncodingParams {
+            mode: EncodingMode::TargetSize,
+            target_size_mb: Some(100.0),
+            size_margin_percent: 1.0,
+            audio_bitrate: "48k".into(),
+            ..Default::default()
+        };
+        // Come sopra, ma con due tracce: 792.000.000 - 2 * 4.800.000.
+        let bitrate = compute_video_bitrate(&params, &info(100.0, 2)).unwrap();
+        assert_eq!(bitrate, 7_824_000);
     }
 
     #[test]
@@ -536,7 +744,7 @@ mod tests {
             size_margin_percent: 0.0,
             ..Default::default()
         };
-        let bitrate = compute_video_bitrate(&params, &info(100.0, false)).unwrap();
+        let bitrate = compute_video_bitrate(&params, &info(100.0, 0)).unwrap();
         assert_eq!(bitrate, 8_000_000);
     }
 
@@ -547,7 +755,7 @@ mod tests {
             target_size_mb: Some(0.001),
             ..Default::default()
         };
-        assert!(compute_video_bitrate(&params, &info(3600.0, true)).is_err());
+        assert!(compute_video_bitrate(&params, &info(3600.0, 1)).is_err());
     }
 
     #[test]
