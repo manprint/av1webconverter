@@ -458,6 +458,18 @@ table.files td {
 table.files tr:last-child td {
   border-bottom: none;
 }
+table.files tr.reorderable {
+  cursor: grab;
+}
+table.files tr.dragging td {
+  opacity: 0.45;
+}
+table.files tr.drop-before td {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+table.files tr.drop-after td {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
 
 .col-select {
   width: 28px;

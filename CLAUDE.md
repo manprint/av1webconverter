@@ -42,7 +42,7 @@ Full detail in `docs/architettura.md`; API contract in `docs/api.md`; the measur
 
 **Cancellation** is the `watch<bool>`: `run_ffmpeg` selects on it while reading child output and kills the process on `true`. Callers distinguish `RunOutcome::Cancelled` from failure. `start_job` sets and publishes `running` before spawning the worker, so the `start` response already enables the Ferma button; setting it inside the worker raced with that response and left the button disabled.
 
-**Sequencing** uses `futures::stream::for_each_concurrent(concurrency, …)` over the job's `files` list, whose order is the conversion order: upload order by default, changeable from the frontend (↑/↓, `PATCH /api/jobs/{job_id}/files/{file_id}/order`) only while the job is not running — with `concurrency = 1` this is exactly the "next file starts when the previous finishes" the spec requires.
+**Sequencing** uses `futures::stream::for_each_concurrent(concurrency, …)` over the job's `files` list, whose order is the conversion order: alphabetical by name within each upload batch by default (`sort_batch_by_name`), changeable from the frontend (drag & drop or ↑/↓, `PATCH /api/jobs/{job_id}/files/{file_id}/order`) only while the job is not running — with `concurrency = 1` this is exactly the "next file starts when the previous finishes" the spec requires.
 
 **Progress parsing** (`src/ffmpeg/progress.rs`) is a port of the awk `show_progress` from the bash scripts, reading `-progress pipe:1`. Percent comes from `out_time_us` (never regresses), refined upward by `frame / total_frames`, capped at 99.9% until the process actually ends. Job-level progress is weighted by source file size.
 

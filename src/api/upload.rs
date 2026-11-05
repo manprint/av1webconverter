@@ -41,6 +41,7 @@ pub async fn upload(
 
     let mut uploaded = 0usize;
     let mut rejected = Vec::new();
+    let mut batch = Vec::new();
 
     while let Some(mut field) = multipart
         .next_field()
@@ -113,6 +114,7 @@ pub async fn upload(
         {
             Ok(file) => {
                 uploaded += 1;
+                batch.push(file.id);
                 tracing::info!(%job_id, file_id = %file.id, name = %file.original_name, bytes = written, "file caricato");
             }
             Err(error) => {
@@ -128,6 +130,8 @@ pub async fn upload(
             }
         }
     }
+
+    state.sort_batch_by_name(job_id, &batch).await?;
 
     if uploaded == 0 && rejected.is_empty() {
         return Err(ApiError::BadRequest(

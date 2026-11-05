@@ -419,6 +419,31 @@ impl AppState {
         .await?;
         Ok(())
     }
+
+    /// Ordina per nome (senza distinguere maiuscole) i file di un upload, che
+    /// restano in coda all'elenco. I file già presenti non cambiano posizione.
+    pub async fn sort_batch_by_name(&self, job_id: Uuid, batch: &[Uuid]) -> ApiResult<()> {
+        if batch.len() < 2 {
+            return Ok(());
+        }
+        let batch = batch.to_vec();
+        self.mutate(job_id, move |job| {
+            let (mut incoming, existing): (Vec<JobFile>, Vec<JobFile>) =
+                std::mem::take(&mut job.files)
+                    .into_iter()
+                    .partition(|file| batch.contains(&file.id));
+            incoming.sort_by_cached_key(|file| {
+                (
+                    file.original_name.to_lowercase(),
+                    file.original_name.clone(),
+                )
+            });
+            job.files = existing;
+            job.files.extend(incoming);
+            Ok(())
+        })
+        .await
+    }
 }
 
 /// Nome sicuro e univoco per il filesystem, preservando l'estensione.
@@ -593,6 +618,58 @@ mod tests {
         assert_eq!(view.job.status, JobStatus::Pending);
         assert_eq!(view.job.files[0].status, FileStatus::Pending);
         assert_eq!(view.job.files[0].progress.percent, 0.0);
+    }
+
+    #[tokio::test]
+    async fn il_blocco_caricato_si_ordina_per_nome_senza_toccare_il_resto() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.paths.input_dir = dir.path().join("in");
+        config.paths.output_dir = dir.path().join("out");
+        config.paths.data_dir = dir.path().join("data");
+        config.paths.log_dir = dir.path().join("logs");
+        config.prepare_directories().unwrap();
+
+        let state = AppState::new(config).await.unwrap();
+        let job_id = state
+            .create_job("nomi".into(), EncodingParams::default(), 1)
+            .await
+            .unwrap()
+            .job
+            .id;
+        let (zeta, incoming) = state
+            .mutate(job_id, |job| {
+                let zeta =
+                    JobFile::new("zeta.mp4".into(), "zeta.mp4".into(), PathBuf::from("z"), 1);
+                let mut incoming = Vec::new();
+                for name in ["c.mp4", "B.mp4", "a.mp4"] {
+                    incoming.push(JobFile::new(
+                        name.into(),
+                        name.into(),
+                        PathBuf::from(name),
+                        1,
+                    ));
+                }
+                let ids: Vec<Uuid> = incoming.iter().map(|file| file.id).collect();
+                job.files.push(zeta.clone());
+                job.files.extend(incoming);
+                Ok((zeta.id, ids))
+            })
+            .await
+            .unwrap();
+
+        state.sort_batch_by_name(job_id, &incoming).await.unwrap();
+        let nomi: Vec<String> = state
+            .view(job_id)
+            .await
+            .unwrap()
+            .job
+            .files
+            .iter()
+            .map(|file| file.original_name.clone())
+            .collect();
+        assert_eq!(nomi, vec!["zeta.mp4", "a.mp4", "B.mp4", "c.mp4"]);
+        assert_eq!(state.view(job_id).await.unwrap().job.files[0].id, zeta);
     }
 
     #[tokio::test]

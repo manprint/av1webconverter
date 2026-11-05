@@ -8,6 +8,7 @@ const store = {
   editing: new Set(),
   selection: new Map(), // job_id -> Set(file_id)
   logTarget: null, // { jobId, fileId }
+  drag: null, // { jobId, fileId } della riga trascinata
 };
 
 const PARAM_FIELDS = [
@@ -428,6 +429,8 @@ function renderFileRow(job, file, index) {
     progress.total_passes > 1 ? ` · passaggio ${progress.pass}/${progress.total_passes}` : "";
   // L'ordine dell'elenco è quello di conversione: si cambia solo a job fermo.
   const canReorder = job.status !== "running";
+  row.draggable = canReorder;
+  row.classList.toggle("reorderable", canReorder);
 
   row.innerHTML = `
     <td class="col-select">
@@ -435,7 +438,7 @@ function renderFileRow(job, file, index) {
     </td>
     <td>
       <span class="file-line">
-        <span class="file-order">${index + 1}.</span>
+        <span class="file-order" title="Trascina per riordinare">${index + 1}.</span>
         <span class="file-name" title="${escapeHtml(file.original_name)}">${escapeHtml(file.original_name)}</span>
       </span>
       ${file.error ? `<span class="file-detail" style="color:var(--error)">${escapeHtml(file.error)}</span>` : ""}
@@ -731,6 +734,34 @@ async function handleJobAction(action, jobId, node, event) {
   }
 }
 
+/** Sposta un file alla posizione indicata; il backend rifiuta il riordino a job in esecuzione. */
+async function reorderFile(jobId, fileId, position) {
+  try {
+    upsertJob(
+      await api(`/api/jobs/${jobId}/files/${fileId}/order`, {
+        method: "PATCH",
+        body: JSON.stringify({ position }),
+      }),
+    );
+  } catch (error) {
+    toast(`Riordino non riuscito: ${error.message}`, "error");
+  }
+}
+
+/** Indica dove cade la riga: sopra se si sale, sotto se si scende. */
+function markDropTarget(row, dragged) {
+  clearDropMarks();
+  if (row === dragged) return;
+  const movingDown = dragged.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING;
+  row.classList.add(movingDown ? "drop-after" : "drop-before");
+}
+
+function clearDropMarks() {
+  for (const node of document.querySelectorAll("tr.drop-before, tr.drop-after")) {
+    node.classList.remove("drop-before", "drop-after");
+  }
+}
+
 async function handleFileAction(action, jobId, fileId, event) {
   const job = store.jobs.get(jobId);
   const file = job?.files.find((item) => item.id === fileId);
@@ -758,16 +789,7 @@ async function handleFileAction(action, jobId, fileId, event) {
       const index = job.files.findIndex((item) => item.id === fileId);
       const position = action === "move-up" ? index - 1 : index + 1;
       if (index < 0 || position < 0 || position >= job.files.length) return;
-      try {
-        upsertJob(
-          await api(`/api/jobs/${jobId}/files/${fileId}/order`, {
-            method: "PATCH",
-            body: JSON.stringify({ position }),
-          }),
-        );
-      } catch (error) {
-        toast(`Riordino non riuscito: ${error.message}`, "error");
-      }
+      await reorderFile(jobId, fileId, position);
       break;
     }
 
@@ -895,6 +917,43 @@ function bindDelegatedEvents() {
     else handleJobAction(button.dataset.action, jobNode.dataset.jobId, jobNode, event);
   });
 
+  jobs.addEventListener("dragstart", (event) => {
+    const row = event.target.closest("tr[data-file-id]");
+    if (!row || !row.draggable) {
+      event.preventDefault();
+      return;
+    }
+    store.drag = { jobId: row.closest(".job").dataset.jobId, fileId: row.dataset.fileId };
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", row.dataset.fileId);
+    row.classList.add("dragging");
+  });
+  jobs.addEventListener("dragover", (event) => {
+    const row = event.target.closest("tr[data-file-id]");
+    if (!store.drag || !row || row.closest(".job").dataset.jobId !== store.drag.jobId) return;
+    const dragged = jobs.querySelector(`tr[data-file-id="${store.drag.fileId}"]`);
+    if (!dragged) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    markDropTarget(row, dragged);
+  });
+  jobs.addEventListener("drop", (event) => {
+    const drag = store.drag;
+    const row = event.target.closest("tr[data-file-id]");
+    store.drag = null;
+    clearDropMarks();
+    if (!drag || !row || row.closest(".job").dataset.jobId !== drag.jobId) return;
+    event.preventDefault();
+    const job = store.jobs.get(drag.jobId);
+    const position = job?.files.findIndex((file) => file.id === row.dataset.fileId) ?? -1;
+    if (position < 0 || row.dataset.fileId === drag.fileId) return;
+    reorderFile(drag.jobId, drag.fileId, position);
+  });
+  jobs.addEventListener("dragend", (event) => {
+    store.drag = null;
+    clearDropMarks();
+    event.target.classList.remove("dragging");
+  });
   jobs.addEventListener("change", (event) => {
     const input = event.target.closest("[data-action]");
     if (!input) return;

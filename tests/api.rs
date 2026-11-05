@@ -316,6 +316,72 @@ async fn stop_di_un_file_non_in_conversione_e_conflict() {
 }
 
 #[tokio::test]
+async fn upload_accoda_il_blocco_in_ordine_alfabetico() {
+    let server = common::start().await;
+    let job_id = create_job(&server, "ordine upload").await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let nomi = |job: &serde_json::Value| -> Vec<String> {
+        job["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|file| file["original_name"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let (content_type, body) = common::multipart_body_many(
+        "files",
+        &[
+            ("c.mp4", &b"c"[..]),
+            ("A.mp4", &b"a"[..]),
+            ("b.mp4", &b"b"[..]),
+        ],
+    );
+    let response = server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/files")))
+        .header("content-type", content_type)
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let job: serde_json::Value = server
+        .client
+        .get(server.url(&format!("/api/jobs/{job_id}")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(nomi(&job), vec!["A.mp4", "b.mp4", "c.mp4"]);
+
+    // Un secondo upload si accoda: l'ordine già presente non viene riordinato.
+    let (content_type, body) = common::multipart_body_many("files", &[("0.mp4", &b"0"[..])]);
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/files")))
+        .header("content-type", content_type)
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    let job: serde_json::Value = server
+        .client
+        .get(server.url(&format!("/api/jobs/{job_id}")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(nomi(&job), vec!["A.mp4", "b.mp4", "c.mp4", "0.mp4"]);
+}
+
+#[tokio::test]
 async fn creazione_job_usa_i_default_e_crea_le_cartelle() {
     let server = common::start().await;
     let job = create_job(&server, "  serie tv  ").await;

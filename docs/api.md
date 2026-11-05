@@ -251,7 +251,9 @@ conservato in `original_name` per la visualizzazione, mentre su disco si usa un
 nome ripulito e reso univoco (`stored_name`).
 
 I file con estensione non ammessa vengono scartati singolarmente senza far
-fallire la richiesta.
+fallire la richiesta. I file accettati nella stessa richiesta vengono accodati in
+ordine alfabetico per `original_name` (maiuscole ignorate); quelli già presenti
+mantengono la loro posizione.
 
 ```json
 {

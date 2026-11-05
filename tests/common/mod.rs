@@ -358,6 +358,26 @@ pub fn video_codec(path: &Path) -> String {
 
 /// Corpo multipart con un solo file, costruito a mano per non dipendere da
 /// helper esterni.
+/// Corpo multipart con più file nello stesso campo, nell'ordine indicato.
+pub fn multipart_body_many(field: &str, files: &[(&str, &[u8])]) -> (String, Vec<u8>) {
+    let boundary = "----av1webconverterboundary";
+    let mut body = Vec::new();
+    for (filename, content) in files {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!(
+                "Content-Disposition: form-data; name=\"{field}\"; filename=\"{filename}\"\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+        body.extend_from_slice(content);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
 pub fn multipart_body(field: &str, filename: &str, content: &[u8]) -> (String, Vec<u8>) {
     let boundary = "----av1webconverterboundary";
     let mut body = Vec::new();
