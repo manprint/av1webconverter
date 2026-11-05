@@ -31,6 +31,7 @@ pub fn router(state: SharedState) -> Router {
         )
         .route("/jobs/{job_id}/start", post(jobs::start))
         .route("/jobs/{job_id}/stop", post(jobs::stop))
+        .route("/jobs/{job_id}/files/{file_id}/stop", post(jobs::stop_file))
         .route(
             "/jobs/{job_id}/files",
             post(upload::upload).layer(DefaultBodyLimit::max(upload_limit)),

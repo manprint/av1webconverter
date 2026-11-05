@@ -27,9 +27,12 @@ parte SSH: ffmpeg viene eseguito nello stesso container del servizio.
   sorgenti.
 - Log di conversione per file, con lo stesso formato degli script bash,
   consultabili live dal frontend e persistiti su disco.
-- Stop e cancellazione di un job in qualsiasi stato, con pulizia dei file sul
-  backend; i file già convertiti restano scaricabili.
-- Download dei file convertiti: singolo, selezione multipla o intero job in ZIP.
+- Stop e cancellazione di un job in qualsiasi stato. Dopo lo stop il file in
+  corso conserva l'output parziale (`_parziale.mkv`/`.mp4`) ed è scaricabile;
+  ogni file in conversione ha inoltre un pulsante **Ferma** che non interrompe
+  il resto del job.
+- Download dei file convertiti e dei parziali: singolo, selezione multipla o
+  intero job in ZIP.
 - Notifiche Slack di terminazione ed errore.
 - Log applicativi strutturati JSON.
 - Misura VMAF opzionale sull'output definitivo, senza modificarlo.

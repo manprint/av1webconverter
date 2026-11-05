@@ -215,11 +215,22 @@ il job non ha file o non ha nulla in attesa, `409` se è già in esecuzione.
 
 ### `POST /api/jobs/{job_id}/stop`
 
-Interrompe il job: i processi ffmpeg attivi vengono terminati, i file in corso
-passano a `cancelled` e nessun output parziale resta sul disco. I file già
-convertiti restano scaricabili anche dal job interrotto
-(`GET /api/jobs/{job_id}/download`). Un job riavviato riparte dai file
-`pending`.
+Interrompe il job: i processi ffmpeg attivi vengono terminati e i file in corso
+passano a `cancelled`. Il primo output non vuoto disponibile viene conservato
+nella cartella del job come `<nome>_parziale.mkv` (o `.mp4`); ffmpeg riceve
+SIGINT per finalizzare l'output prima della chiusura, con SIGKILL dopo 30 s se
+non esce. Il file resta
+scaricabile con l'endpoint del singolo file e incluso nello ZIP. Se l'output
+finale era già stato pubblicato, resta quello. I file già convertiti restano
+scaricabili anche dal job interrotto (`GET /api/jobs/{job_id}/download`). Un job
+riavviato riparte dai file `pending`.
+
+### `POST /api/jobs/{job_id}/files/{file_id}/stop`
+Ferma il solo file in stato `running`, senza interrompere il job: gli altri file
+continuano e quelli ancora `pending` partono normalmente. Il file passa a
+`cancelled` e conserva l'eventuale parziale come sopra. Risponde con la
+`JobView` aggiornata; `404` se il file non appartiene al job, `409` se non è in
+conversione.
 
 ### `DELETE /api/jobs/{job_id}`
 
@@ -291,12 +302,13 @@ Sono restituite le ultime `jobs.log_buffer_lines` righe; su disco restano tutte.
 
 ### `GET /api/jobs/{job_id}/files/{file_id}/download`
 
-Il singolo file convertito. `409` se non è ancora stato convertito.
+Il singolo file convertito, oppure il parziale conservato dopo uno stop. `409`
+se non esiste alcun output.
 
 ### `GET /api/jobs/{job_id}/download`
 
-Tutti i file convertiti del job, in un archivio ZIP (senza ricompressione).
-`409` se non c'è nulla da scaricare.
+Tutti i file convertiti o parziali del job, in un archivio ZIP (senza
+ricompressione). `409` se non c'è nulla da scaricare.
 
 ### `POST /api/jobs/{job_id}/download`
 

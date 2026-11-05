@@ -267,11 +267,14 @@ impl Job {
         counts
     }
 
-    /// I file scaricabili sono quelli con un output effettivamente presente.
+    /// I file scaricabili sono quelli con un output effettivamente presente:
+    /// completati, saltati (output preesistente) e interrotti con un parziale.
     pub fn downloadable_files(&self) -> impl Iterator<Item = &JobFile> {
         self.files.iter().filter(|file| {
-            matches!(file.status, FileStatus::Completed | FileStatus::Skipped)
-                && file.output_path.is_some()
+            matches!(
+                file.status,
+                FileStatus::Completed | FileStatus::Skipped | FileStatus::Cancelled
+            ) && file.output_path.is_some()
         })
     }
 }
@@ -409,5 +412,27 @@ mod tests {
         json.as_object_mut().unwrap().remove("vmaf_analysis");
         let deserialized: JobFile = serde_json::from_value(json).unwrap();
         assert!(deserialized.vmaf_analysis.is_none());
+    }
+
+    #[test]
+    fn un_file_interrotto_con_un_parziale_resta_scaricabile() {
+        let mut job = job_with_files(&[
+            (1, FileStatus::Cancelled, 42.0),
+            (1, FileStatus::Completed, 100.0),
+            (1, FileStatus::Cancelled, 0.0),
+        ]);
+        job.files[0].output_path = Some(PathBuf::from("/tmp/a_parziale.mkv"));
+        job.files[1].output_path = Some(PathBuf::from("/tmp/b.mp4"));
+        let nomi: Vec<_> = job
+            .downloadable_files()
+            .map(|file| file.output_path.clone().unwrap())
+            .collect();
+        assert_eq!(
+            nomi,
+            vec![
+                PathBuf::from("/tmp/a_parziale.mkv"),
+                PathBuf::from("/tmp/b.mp4")
+            ]
+        );
     }
 }

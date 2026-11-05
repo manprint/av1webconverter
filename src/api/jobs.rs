@@ -127,6 +127,15 @@ pub async fn stop(
     Ok(Json(state.view(job_id).await?))
 }
 
+/// Ferma il singolo file in conversione senza interrompere il job.
+pub async fn stop_file(
+    State(state): State<SharedState>,
+    Path((job_id, file_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<JobView>> {
+    worker::stop_file(&state, job_id, file_id).await?;
+    Ok(Json(state.view(job_id).await?))
+}
+
 pub async fn delete(
     State(state): State<SharedState>,
     Path(job_id): Path<Uuid>,

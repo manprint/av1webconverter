@@ -38,8 +38,20 @@ pub async fn single_file(
         .clone()
         .ok_or_else(|| ApiError::Conflict("il file non è ancora stato convertito".into()))?;
 
-    let download_name = crate::state::output_name_for(&file.stored_name, &view.job.params.suffix);
-    stream_file(output_path, &download_name, "video/mp4", false).await
+    // Il nome reale copre anche i parziali (`_parziale.mkv`), che non seguono
+    // la convenzione del suffisso del job.
+    let download_name = output_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| {
+            crate::state::output_name_for(&file.stored_name, &view.job.params.suffix)
+        });
+    let content_type = if output_path.extension().and_then(|ext| ext.to_str()) == Some("mkv") {
+        "video/x-matroska"
+    } else {
+        "video/mp4"
+    };
+    stream_file(output_path, &download_name, content_type, false).await
 }
 
 /// Download dell'intero job come archivio ZIP.
@@ -73,10 +85,13 @@ async fn build_zip(state: SharedState, job_id: Uuid, file_ids: Vec<Uuid>) -> Api
             continue;
         };
         // Nomi duplicati dentro lo ZIP renderebbero l'archivio ambiguo.
-        let name = crate::state::unique_stored_name(
-            &crate::state::output_name_for(&file.stored_name, &view.job.params.suffix),
-            &used_names,
-        );
+        let base_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| {
+                crate::state::output_name_for(&file.stored_name, &view.job.params.suffix)
+            });
+        let name = crate::state::unique_stored_name(&base_name, &used_names);
         used_names.push(name.clone());
         entries.push((name, path.clone()));
     }

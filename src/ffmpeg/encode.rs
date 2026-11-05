@@ -27,6 +27,35 @@ pub enum RunOutcome {
     Cancelled,
 }
 
+/// Tempo concesso a ffmpeg per finalizzare l'output dopo SIGINT.
+pub const GRACEFUL_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Chiede a ffmpeg di uscire in modo ordinato (SIGINT), così scrive trailer e
+/// codec flush. `false` se il segnale non è stato inviato.
+fn terminate_gracefully(child: &tokio::process::Child) -> bool {
+    #[cfg(unix)]
+    {
+        let Some(pid) = child.id() else {
+            return false;
+        };
+        // SAFETY: segnale a un processo figlio ancora attivo.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGINT) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child;
+        false
+    }
+}
+
+/// Attende la scadenza; senza scadenza resta in attesa per sempre.
+async fn wait_deadline(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
 /// Filtro di scala: limita l'altezza, mantiene l'aspetto visivo del sorgente e
 /// normalizza a pixel quadrati per evitare DAR errati con sorgenti anamorfiche.
 ///
@@ -337,6 +366,10 @@ where
     let mut stdout_open = true;
     let mut stderr_open = true;
     let mut cancelled = false;
+    // Dopo lo stop ffmpeg riceve SIGINT e finalizza il file (flush encoder e
+    // trailer): senza questo il Matroska resta a zero byte e non c'è parziale
+    // da scaricare. Se non esce entro il limite viene terminato con SIGKILL.
+    let mut kill_deadline: Option<tokio::time::Instant> = None;
 
     while stdout_open || stderr_open {
         tokio::select! {
@@ -374,8 +407,17 @@ where
             changed = cancel.changed(), if !cancelled => {
                 if changed.is_err() || *cancel.borrow() {
                     cancelled = true;
-                    let _ = child.start_kill();
+                    if !terminate_gracefully(&child) {
+                        let _ = child.start_kill();
+                    } else {
+                        kill_deadline =
+                            Some(tokio::time::Instant::now() + GRACEFUL_STOP_TIMEOUT);
+                    }
                 }
+            }
+            _ = wait_deadline(kill_deadline), if kill_deadline.is_some() => {
+                let _ = child.start_kill();
+                kill_deadline = None;
             }
         }
     }

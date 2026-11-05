@@ -275,6 +275,47 @@ async fn create_job(server: &common::TestServer, name: &str) -> serde_json::Valu
 }
 
 #[tokio::test]
+async fn stop_di_un_file_non_in_conversione_e_conflict() {
+    let server = common::start().await;
+    let job_id = create_job(&server, "stop file").await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (content_type, body) = common::multipart_body("files", "film.mp4", b"contenuto mp4");
+    let uploaded: serde_json::Value = server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/files")))
+        .header("content-type", content_type)
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let file_id = uploaded["job"]["files"][0]["id"].as_str().unwrap();
+
+    let response = server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/files/{file_id}/stop")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 409);
+
+    let response = server
+        .client
+        .post(server.url(&format!(
+            "/api/jobs/{job_id}/files/{}/stop",
+            uuid::Uuid::new_v4()
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 404);
+}
+
+#[tokio::test]
 async fn creazione_job_usa_i_default_e_crea_le_cartelle() {
     let server = common::start().await;
     let job = create_job(&server, "  serie tv  ").await;

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use tokio::sync::{watch, RwLock};
@@ -12,10 +12,16 @@ use uuid::Uuid;
 use crate::config::{Config, EncodingParams};
 use crate::error::{ApiError, ApiResult};
 use crate::events::{Event, EventBus};
+use crate::ffmpeg::encode::GRACEFUL_STOP_TIMEOUT;
 use crate::joblog::JobLogs;
 use crate::models::{FileStatus, Job, JobFile, JobStatus, JobView, Progress};
 use crate::slack::SlackNotifier;
 use crate::store::JobStore;
+
+/// Attesa massima dello stop: ffmpeg ha il tempo di finalizzare il Matroska
+/// (vedi `GRACEFUL_STOP_TIMEOUT`) prima che la risposta HTTP torni.
+const STOP_WAIT: std::time::Duration =
+    std::time::Duration::from_secs(GRACEFUL_STOP_TIMEOUT.as_secs() + 10);
 
 /// Stato runtime di un job: la parte serializzabile più il canale di stop.
 #[derive(Debug)]
@@ -24,6 +30,9 @@ pub struct JobHandle {
     pub job: RwLock<Job>,
     /// `true` chiede l'interruzione: i processi ffmpeg attivi vengono terminati.
     pub cancel_tx: watch::Sender<bool>,
+    /// Canali di stop dei singoli file in conversione, per fermarne uno senza
+    /// interrompere il job.
+    file_cancels: Mutex<HashMap<Uuid, watch::Sender<bool>>>,
     /// Evita di avviare due worker sullo stesso job.
     pub worker_running: AtomicBool,
 }
@@ -35,6 +44,7 @@ impl JobHandle {
             id: job.id,
             job: RwLock::new(job),
             cancel_tx,
+            file_cancels: Mutex::new(HashMap::new()),
             worker_running: AtomicBool::new(false),
         })
     }
@@ -43,8 +53,48 @@ impl JobHandle {
         self.cancel_tx.subscribe()
     }
 
+    /// Registra il canale di stop di un file. Se il job è già stato fermato il
+    /// canale nasce con `true`, così il file non parte.
+    pub fn register_file_cancel(
+        &self,
+        file_id: Uuid,
+    ) -> (FileCancelGuard<'_>, watch::Receiver<bool>) {
+        let (tx, rx) = watch::channel(self.is_stop_requested());
+        self.file_cancels
+            .lock()
+            .expect("lock dei canali di stop per file")
+            .insert(file_id, tx);
+        (
+            FileCancelGuard {
+                handle: self,
+                file_id,
+            },
+            rx,
+        )
+    }
+
+    /// Chiede lo stop del solo file indicato. `false` se non è in conversione.
+    pub fn request_file_stop(&self, file_id: Uuid) -> bool {
+        self.file_cancels
+            .lock()
+            .expect("lock dei canali di stop per file")
+            .get(&file_id)
+            .is_some_and(|tx| {
+                tx.send_replace(true);
+                true
+            })
+    }
+
     pub fn request_stop(&self) {
-        let _ = self.cancel_tx.send(true);
+        self.cancel_tx.send_replace(true);
+        for tx in self
+            .file_cancels
+            .lock()
+            .expect("lock dei canali di stop per file")
+            .values()
+        {
+            let _ = tx.send(true);
+        }
     }
 
     pub fn is_stop_requested(&self) -> bool {
@@ -53,7 +103,27 @@ impl JobHandle {
 
     /// Riarma il canale di stop prima di un nuovo avvio.
     pub fn reset_stop(&self) {
-        let _ = self.cancel_tx.send(false);
+        self.cancel_tx.send_replace(false);
+        self.file_cancels
+            .lock()
+            .expect("lock dei canali di stop per file")
+            .clear();
+    }
+}
+
+/// Deregistra il canale di stop del file quando la conversione termina.
+pub struct FileCancelGuard<'a> {
+    handle: &'a JobHandle,
+    file_id: Uuid,
+}
+
+impl Drop for FileCancelGuard<'_> {
+    fn drop(&mut self) {
+        self.handle
+            .file_cancels
+            .lock()
+            .expect("lock dei canali di stop per file")
+            .remove(&self.file_id);
     }
 }
 
@@ -236,7 +306,8 @@ impl AppState {
     /// Attende che il worker si accorga della richiesta di stop, con un tetto
     /// massimo: la cancellazione non deve poter bloccare la richiesta HTTP.
     pub async fn wait_worker_stopped(&self, handle: &JobHandle) {
-        for _ in 0..100 {
+        let deadline = tokio::time::Instant::now() + STOP_WAIT;
+        while tokio::time::Instant::now() < deadline {
             if !handle.worker_running.load(Ordering::SeqCst) {
                 return;
             }
@@ -407,6 +478,26 @@ pub async fn remove_file_if_present(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lo_stop_di_un_file_non_ferma_il_job() {
+        let handle = JobHandle::new(Job::new("test".into(), EncodingParams::default(), 1));
+        let file_id = Uuid::new_v4();
+        let (_guard, rx) = handle.register_file_cancel(file_id);
+        assert!(!*rx.borrow());
+        assert!(handle.request_file_stop(file_id));
+        assert!(*rx.borrow());
+        assert!(!handle.is_stop_requested());
+    }
+
+    #[test]
+    fn lo_stop_del_job_ferma_anche_i_file_attivi() {
+        let handle = JobHandle::new(Job::new("test".into(), EncodingParams::default(), 1));
+        let (_guard, rx) = handle.register_file_cancel(Uuid::new_v4());
+        handle.request_stop();
+        assert!(*rx.borrow());
+        assert!(handle.is_stop_requested());
+    }
 
     #[test]
     fn nome_ripulito_dai_percorsi() {

@@ -99,6 +99,23 @@ pub async fn start_job(state: SharedState, job_id: Uuid) -> ApiResult<()> {
     Ok(())
 }
 
+/// Richiede l'interruzione del solo file indicato, lasciando attivo il job.
+pub async fn stop_file(state: &SharedState, job_id: Uuid, file_id: Uuid) -> ApiResult<()> {
+    let handle = state.handle(job_id).await?;
+    {
+        let job = handle.job.read().await;
+        let file = job
+            .file(file_id)
+            .ok_or_else(|| ApiError::NotFound(format!("file {file_id} non trovato")))?;
+        if file.status != FileStatus::Running {
+            return Err(ApiError::Conflict("il file non è in conversione".into()));
+        }
+    }
+    if !handle.request_file_stop(file_id) {
+        return Err(ApiError::Conflict("il file non è in conversione".into()));
+    }
+    Ok(())
+}
 /// Richiede l'interruzione del job e attende che il worker si fermi.
 pub async fn stop_job(state: &SharedState, job_id: Uuid) -> ApiResult<()> {
     let handle = state.handle(job_id).await?;
@@ -194,6 +211,14 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
         &format!("Avvio conversione: {original_name}"),
     )
     .await;
+
+    // Da qui in poi il file ha un canale di stop proprio: fermarlo non
+    // interrompe gli altri file del job.
+    let (_cancel_guard, mut cancel) = handle.register_file_cancel(file_id);
+    if *cancel.borrow() {
+        mark_cancelled(state, handle, file_id).await;
+        return Ok(());
+    }
 
     let output_dir = state.job_output_dir(job_id);
     tokio::fs::create_dir_all(&output_dir)
@@ -311,7 +336,6 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
     };
     let sonde = segmenti.len() as u32 * crf_candidati.len() as u32;
     let passi_totali = passi_totali(&params, sonde);
-    let mut cancel = handle.cancel_rx();
 
     let (params_codifica, vmaf_analysis) = if params.mode == EncodingMode::VmafAnalysis {
         let Some((crf_scelto, analisi)) = analizza_file(
@@ -406,7 +430,7 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
                 "Conversione interrotta su richiesta",
             )
             .await;
-            mark_cancelled(state, handle, file_id).await;
+            cancel_with_partial(state, handle, file_id, &output_path, &temp_mkv, &temp_mp4).await;
             return Ok(());
         }
     }
@@ -436,7 +460,7 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
     .context("remux del file MP4 finale")?;
 
     if outcome == RunOutcome::Cancelled {
-        mark_cancelled(state, handle, file_id).await;
+        cancel_with_partial(state, handle, file_id, &output_path, &temp_mkv, &temp_mp4).await;
         return Ok(());
     }
 
@@ -1139,6 +1163,94 @@ async fn mark_cancelled(state: &SharedState, handle: &Arc<JobHandle>, file_id: U
     .await;
 }
 
+/// Chiude un file interrotto conservando l'eventuale output parziale nella
+/// cartella del job, così resta scaricabile. Preferisce il Matroska completo
+/// della codifica al MP4 del remux, che può essere troncato prima del `moov`.
+async fn cancel_with_partial(
+    state: &SharedState,
+    handle: &Arc<JobHandle>,
+    file_id: Uuid,
+    output_path: &Path,
+    temp_mkv: &Path,
+    temp_mp4: &Path,
+) {
+    let preserved = preserve_partial(output_path, temp_mkv, temp_mp4).await;
+    if let Some((path, size)) = &preserved {
+        log_line(
+            state,
+            handle.id,
+            file_id,
+            &format!(
+                "File parziale disponibile: {} — {}",
+                path.display(),
+                format_size(*size)
+            ),
+        )
+        .await;
+    }
+    finish_file(
+        state,
+        handle,
+        file_id,
+        FileStatus::Cancelled,
+        preserved.as_ref().map(|(path, _)| path.clone()),
+        preserved.as_ref().map(|(_, size)| *size),
+        None,
+        None,
+        None,
+    )
+    .await;
+}
+
+/// Sposta nella cartella di output il primo file non vuoto fra output finale,
+/// Matroska della codifica e MP4 del remux. Il nome prende il suffisso
+/// `_parziale` per non confonderlo con un output completo.
+async fn preserve_partial(
+    output_path: &Path,
+    temp_mkv: &Path,
+    temp_mp4: &Path,
+) -> Option<(PathBuf, u64)> {
+    for candidate in [output_path, temp_mkv, temp_mp4] {
+        let Ok(metadata) = tokio::fs::metadata(candidate).await else {
+            continue;
+        };
+        if metadata.len() == 0 {
+            continue;
+        }
+        if candidate == output_path {
+            return Some((candidate.to_path_buf(), metadata.len()));
+        }
+        let extension = candidate
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("mkv");
+        let stem = output_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("output");
+        let partial = output_path
+            .parent()
+            .map(|dir| dir.join(format!("{stem}_parziale.{extension}")))?;
+        match tokio::fs::rename(candidate, &partial).await {
+            Ok(()) => {
+                let size = tokio::fs::metadata(&partial)
+                    .await
+                    .map(|meta| meta.len())
+                    .unwrap_or(metadata.len());
+                return Some((partial, size));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    path = %candidate.display(),
+                    %error,
+                    "conservazione del file parziale fallita"
+                );
+            }
+        }
+    }
+    None
+}
+
 async fn fail_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uuid, message: String) {
     log_line(state, handle.id, file_id, &format!("ERRORE: {message}")).await;
     let file_name = {
@@ -1174,7 +1286,7 @@ async fn finalize_job(state: &SharedState, handle: &Arc<JobHandle>) {
         let counts = job.counts();
         job.status = if counts.failed > 0 {
             JobStatus::Failed
-        } else if counts.cancelled > 0 || handle.is_stop_requested() {
+        } else if handle.is_stop_requested() {
             JobStatus::Stopped
         } else {
             JobStatus::Completed
@@ -1302,6 +1414,68 @@ mod tests {
             state.view(view.job.id).await.unwrap().job.status,
             JobStatus::Stopped
         );
+    }
+
+    #[tokio::test]
+    async fn stop_di_un_file_senza_conversione_e_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_di_prova(dir.path()).await;
+        let view = state
+            .create_job("file fermo".into(), EncodingParams::default(), 1)
+            .await
+            .unwrap();
+        let job_id = view.job.id;
+        let file_id = Uuid::new_v4();
+        state
+            .mutate(job_id, |job| {
+                let mut file = crate::models::JobFile::new(
+                    "a.mp4".into(),
+                    "a.mp4".into(),
+                    dir.path().join("a.mp4"),
+                    1,
+                );
+                file.id = file_id;
+                job.files.push(file);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let error = stop_file(&state, job_id, file_id).await.unwrap_err();
+        assert!(matches!(error, ApiError::Conflict(_)));
+    }
+
+    #[tokio::test]
+    async fn il_file_interrotto_conserva_il_matroska_parziale() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out");
+        tokio::fs::create_dir_all(&out).await.unwrap();
+        let output = out.join("film_av1.mp4");
+        let temp_mkv = dir.path().join(".av1-x.mkv");
+        let temp_mp4 = dir.path().join(".av1-x.mp4");
+        tokio::fs::write(&temp_mkv, b"matroska").await.unwrap();
+
+        let (path, size) = preserve_partial(&output, &temp_mkv, &temp_mp4)
+            .await
+            .unwrap();
+        assert_eq!(path, out.join("film_av1_parziale.mkv"));
+        assert_eq!(size, 8);
+        assert!(!temp_mkv.exists());
+    }
+
+    #[tokio::test]
+    async fn un_output_gia_pubblicato_resta_al_suo_posto() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("film_av1.mp4");
+        tokio::fs::write(&output, b"mp4").await.unwrap();
+        let (path, size) = preserve_partial(
+            &output,
+            &dir.path().join("mancante.mkv"),
+            &dir.path().join("mancante.mp4"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(path, output);
+        assert_eq!(size, 3);
     }
 
     #[test]

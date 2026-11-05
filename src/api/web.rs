@@ -67,3 +67,28 @@ async fn style_css() -> Response {
 async fn favicon() -> Response {
     asset(FAVICON_SVG, "image/svg+xml", true)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gli_asset_incorporano_i_campi_svt_dedicati() {
+        for key in ["sharpness", "luminance_qp_bias"] {
+            assert!(
+                INDEX_HTML.contains(&format!("name=\"{key}\"")),
+                "campo {key} assente dal form"
+            );
+            assert!(
+                APP_JS.contains(&format!("key: \"{key}\"")),
+                "campo {key} assente dai parametri"
+            );
+        }
+    }
+
+    #[test]
+    fn gli_asset_sono_versionati_contro_la_cache() {
+        assert!(INDEX_HTML.contains("/app.js?v={{APP_VERSION}}"));
+        assert!(INDEX_HTML.contains("/style.css?v={{APP_VERSION}}"));
+    }
+}

@@ -396,7 +396,7 @@ function renderJob(job) {
 
   const running = job.status === "running";
   const hasPending = (counts.pending ?? 0) > 0;
-  const downloadable = (counts.completed ?? 0) + (counts.skipped ?? 0) > 0;
+  const downloadable = job.files.some(isDownloadable);
   node.querySelector('[data-action="start"]').disabled = running || !hasPending;
   node.querySelector('[data-action="stop"]').disabled = !running;
   node.querySelector('[data-action="download-all"]').disabled = !downloadable;
@@ -421,7 +421,7 @@ function renderFileRow(job, file, index) {
   const row = document.createElement("tr");
   row.dataset.fileId = file.id;
 
-  const selectable = file.status === "completed" || file.status === "skipped";
+  const selectable = isDownloadable(file);
   const checked = selectionFor(job.id).has(file.id);
   const progress = file.progress ?? {};
   const passLabel =
@@ -456,6 +456,7 @@ function renderFileRow(job, file, index) {
         <button class="button" data-action="move-up" title="Sposta su" aria-label="Sposta su" ${canReorder && index > 0 ? "" : "disabled"}>↑</button>
         <button class="button" data-action="move-down" title="Sposta giù" aria-label="Sposta giù" ${canReorder && index < job.files.length - 1 ? "" : "disabled"}>↓</button>
         <button class="button" data-action="show-log">Log</button>
+        <button class="button danger" data-action="stop-file" title="Ferma questo file" ${file.status === "running" ? "" : "disabled"}>Ferma</button>
         <button class="button" data-action="download-file" ${selectable ? "" : "disabled"}>Scarica</button>
         <button class="button danger" data-action="remove-file" ${file.status === "running" ? "disabled" : ""}>Rimuovi</button>
       </div>
@@ -463,6 +464,11 @@ function renderFileRow(job, file, index) {
   return row;
 }
 
+/** Un file si scarica se ha prodotto un output, anche parziale. */
+function isDownloadable(file) {
+  const withOutput = file.status === "completed" || file.status === "skipped" || file.status === "cancelled";
+  return withOutput && file.output_size_bytes !== null && file.output_size_bytes !== undefined;
+}
 function fileProgressText(file, passLabel) {
   const progress = file.progress ?? {};
   if (file.status === "running") {
@@ -713,9 +719,7 @@ async function handleJobAction(action, jobId, node, event) {
 
     case "select-all": {
       const selection = selectionFor(jobId);
-      const selectable = job.files.filter(
-        (file) => file.status === "completed" || file.status === "skipped",
-      );
+      const selectable = job.files.filter(isDownloadable);
       if (event.target.checked) selectable.forEach((file) => selection.add(file.id));
       else selection.clear();
       render();
@@ -739,6 +743,14 @@ async function handleFileAction(action, jobId, fileId, event) {
 
     case "download-file":
       window.location.href = `/api/jobs/${jobId}/files/${fileId}/download`;
+      break;
+    case "stop-file":
+      try {
+        upsertJob(await api(`/api/jobs/${jobId}/files/${fileId}/stop`, { method: "POST" }));
+        toast("File interrotto.");
+      } catch (error) {
+        toast(`Stop del file non riuscito: ${error.message}`, "error");
+      }
       break;
 
     case "move-up":
