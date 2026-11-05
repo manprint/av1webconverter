@@ -30,7 +30,7 @@ RUN apt-get update \
 
 WORKDIR /build
 
-RUN curl -fL --retry 3 \
+RUN curl -fL --retry 5 --retry-all-errors --retry-delay 5 \
         -o svt-av1.tar.bz2 \
         "https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v${SVT_AV1_VERSION}/SVT-AV1-v${SVT_AV1_VERSION}.tar.bz2" \
     && printf '%s  %s\n' "${SVT_AV1_SHA256}" svt-av1.tar.bz2 | sha256sum -c - \
@@ -48,7 +48,7 @@ RUN curl -fL --retry 3 \
     && cmake --build svt-build --parallel \
     && cmake --install svt-build
 
-RUN curl -fL --retry 3 \
+RUN curl -fL --retry 5 --retry-all-errors --retry-delay 5 \
         -o dav1d.tar.xz \
         "https://download.videolan.org/pub/videolan/dav1d/${DAV1D_VERSION}/dav1d-${DAV1D_VERSION}.tar.xz" \
     && printf '%s  %s\n' "${DAV1D_SHA256}" dav1d.tar.xz | sha256sum -c - \
@@ -65,7 +65,7 @@ RUN curl -fL --retry 3 \
     && meson compile -C dav1d-build \
     && meson install -C dav1d-build
 
-RUN curl -fL --retry 3 \
+RUN curl -fL --retry 5 --retry-all-errors --retry-delay 5 \
         -o vmaf.tar.gz \
         "https://github.com/Netflix/vmaf/archive/refs/tags/v${VMAF_VERSION}.tar.gz" \
     && printf '%s  %s\n' "${VMAF_SHA256}" vmaf.tar.gz | sha256sum -c - \
@@ -85,7 +85,7 @@ RUN curl -fL --retry 3 \
     && meson compile -C vmaf-build \
     && meson install -C vmaf-build
 
-RUN curl -fL --retry 3 \
+RUN curl -fL --retry 5 --retry-all-errors --retry-delay 5 \
         -o opus.tar.gz \
         "https://downloads.xiph.org/releases/opus/opus-${OPUS_VERSION}.tar.gz" \
     && printf '%s  %s\n' "${OPUS_SHA256}" opus.tar.gz | sha256sum -c - \
@@ -103,7 +103,7 @@ RUN curl -fL --retry 3 \
 
 ENV PKG_CONFIG_PATH=/opt/ffmpeg/lib/pkgconfig
 
-RUN curl -fL --retry 3 \
+RUN curl -fL --retry 5 --retry-all-errors --retry-delay 5 \
         -o ffmpeg.tar.xz \
         "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
     && printf '%s  %s\n' "${FFMPEG_SHA256}" ffmpeg.tar.xz | sha256sum -c - \
