@@ -119,6 +119,15 @@ pub async fn start(
     Ok(Json(state.view(job_id).await?))
 }
 
+/// Avvia la conversione di un solo file in attesa; gli altri restano in attesa.
+pub async fn start_file(
+    State(state): State<SharedState>,
+    Path((job_id, file_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<JobView>> {
+    worker::start_file(state.clone(), job_id, file_id).await?;
+    Ok(Json(state.view(job_id).await?))
+}
+
 pub async fn stop(
     State(state): State<SharedState>,
     Path(job_id): Path<Uuid>,

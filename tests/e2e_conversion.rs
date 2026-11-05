@@ -699,6 +699,86 @@ async fn un_audio_ac3_5_1_diventa_opus_stereo() {
     assert_eq!(common::audio_streams(&output_path), ["opus,2,stereo"]);
 }
 
+/// Attende che il worker si fermi. A differenza di `wait_for_job_status` accetta
+/// lo stato `pending`: un job con file ancora in attesa non è terminale.
+async fn attende_fine_esecuzione(
+    server: &common::TestServer,
+    job_id: &str,
+    timeout: Duration,
+) -> serde_json::Value {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let job: serde_json::Value = server
+            .client
+            .get(server.url(&format!("/api/jobs/{job_id}")))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if job["status"] != "running" || std::time::Instant::now() >= deadline {
+            return job;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+#[tokio::test]
+async fn avvio_del_singolo_file_lascia_in_attesa_gli_altri() {
+    if !common::ffmpeg_with_svtav1() {
+        eprintln!("ffmpeg con SVT-AV1 non disponibile: test saltato");
+        return;
+    }
+    let server = common::start().await;
+    let primo = server.temp.path().join("primo.mp4");
+    let secondo = server.temp.path().join("secondo.mp4");
+    common::make_test_video_at(&primo, 25, 3, "320x180");
+    common::make_test_video_at(&secondo, 25, 3, "320x180");
+    let job: serde_json::Value = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({ "name": "singolo" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    upload_file(&server, &job_id, "primo.mp4", &primo).await;
+    let uploaded = upload_file(&server, &job_id, "secondo.mp4", &secondo).await;
+    let secondo_id = uploaded["job"]["files"][1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let response = server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/files/{secondo_id}/start")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    let job = attende_fine_esecuzione(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "pending", "{job}");
+    let stato = |index: usize| job["files"][index]["status"].clone();
+    assert_eq!(stato(0), "pending", "{job}");
+    assert_eq!(stato(1), "completed", "{job}");
+
+    // Il job intero riparte dai file rimasti in attesa.
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/start")))
+        .send()
+        .await
+        .unwrap();
+    let job = common::wait_for_job_status(&server, &job_id, Duration::from_secs(300)).await;
+    assert_eq!(job["status"], "completed", "{job}");
+    assert_eq!(job["files"][0]["status"], "completed", "{job}");
+}
+
 #[tokio::test]
 async fn il_gop_dura_dieci_secondi_al_frame_rate_del_sorgente() {
     if !common::ffmpeg_with_svtav1() {

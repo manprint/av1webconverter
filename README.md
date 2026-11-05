@@ -20,6 +20,8 @@ parte SSH: ffmpeg viene eseguito nello stesso container del servizio.
 - Parametri di conversione per job: default dal file di configurazione,
   sovrascrivibili dal frontend; l'altezza massima si sceglie da un menu con
   valori predefiniti, inclusa `Dimensione originale`.
+- Ogni file in attesa ha un pulsante **Avvia** per convertirlo da solo, senza
+  avviare il resto del job.
 - Conversione **in sequenza** dentro il job (1 conversione simultanea per
   default, valore configurabile e modificabile per job). L'ordine di
   conversione dei file si cambia dal frontend trascinando le righe con il mouse

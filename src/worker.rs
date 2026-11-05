@@ -36,12 +36,31 @@ use crate::state::{output_name_for, remove_file_if_present, JobHandle, SharedSta
 ///
 /// Fallisce se il job è già in esecuzione o se non ci sono file da convertire.
 pub async fn start_job(state: SharedState, job_id: Uuid) -> ApiResult<()> {
+    start_selected(state, job_id, None).await
+}
+
+/// Avvia la conversione del solo file indicato: gli altri file restano in attesa.
+pub async fn start_file(state: SharedState, job_id: Uuid, file_id: Uuid) -> ApiResult<()> {
+    start_selected(state, job_id, Some(file_id)).await
+}
+
+async fn start_selected(state: SharedState, job_id: Uuid, only: Option<Uuid>) -> ApiResult<()> {
     let handle = state.handle(job_id).await?;
 
     {
         let job = handle.job.read().await;
         if job.status == JobStatus::Running {
             return Err(ApiError::Conflict("il job è già in esecuzione".into()));
+        }
+        if let Some(file_id) = only {
+            let file = job
+                .file(file_id)
+                .ok_or_else(|| ApiError::NotFound(format!("file {file_id} non trovato")))?;
+            if file.status != FileStatus::Pending {
+                return Err(ApiError::Conflict(
+                    "il file non è in attesa di conversione".into(),
+                ));
+            }
         }
         if job.files.is_empty() {
             return Err(ApiError::BadRequest(
@@ -88,7 +107,7 @@ pub async fn start_job(state: SharedState, job_id: Uuid) -> ApiResult<()> {
 
     tokio::spawn(async move {
         let handle_for_flag = handle.clone();
-        if let Err(error) = run_job(state, handle).await {
+        if let Err(error) = run_job(state, handle, only).await {
             tracing::error!(%job_id, error = %format!("{error:#}"), "worker del job terminato con errore");
         }
         handle_for_flag
@@ -135,7 +154,7 @@ pub async fn stop_job(state: &SharedState, job_id: Uuid) -> ApiResult<()> {
     Ok(())
 }
 
-async fn run_job(state: SharedState, handle: Arc<JobHandle>) -> Result<()> {
+async fn run_job(state: SharedState, handle: Arc<JobHandle>, only: Option<Uuid>) -> Result<()> {
     let job_id = handle.id;
 
     let (files, concurrency) = {
@@ -144,6 +163,7 @@ async fn run_job(state: SharedState, handle: Arc<JobHandle>) -> Result<()> {
             .files
             .iter()
             .filter(|file| file.status == FileStatus::Pending)
+            .filter(|file| only.is_none_or(|id| id == file.id))
             .map(|file| file.id)
             .collect();
         (pending, job.concurrency.max(1))
@@ -203,6 +223,7 @@ async fn convert_file(state: &SharedState, handle: &Arc<JobHandle>, file_id: Uui
         status: FileStatus::Running,
         error: None,
     });
+    publish_snapshot(state, handle).await;
 
     log_line(
         state,
@@ -1288,10 +1309,12 @@ async fn finalize_job(state: &SharedState, handle: &Arc<JobHandle>) {
             JobStatus::Failed
         } else if handle.is_stop_requested() {
             JobStatus::Stopped
+        } else if counts.pending > 0 {
+            JobStatus::Pending
         } else {
             JobStatus::Completed
         };
-        job.finished_at = Some(OffsetDateTime::now_utc());
+        job.finished_at = job.status.is_terminal().then(OffsetDateTime::now_utc);
         job.clone()
     };
 
@@ -1307,7 +1330,9 @@ async fn finalize_job(state: &SharedState, handle: &Arc<JobHandle>) {
         job_id: job.id,
         status: job.status,
     });
-    state.slack.notify_job_finished(&job).await;
+    if job.status.is_terminal() {
+        state.slack.notify_job_finished(&job).await;
+    }
 }
 
 async fn log_line(state: &SharedState, job_id: Uuid, file_id: Uuid, line: &str) {
@@ -1414,6 +1439,42 @@ mod tests {
             state.view(view.job.id).await.unwrap().job.status,
             JobStatus::Stopped
         );
+    }
+
+    #[tokio::test]
+    async fn start_di_un_file_gia_elaborato_e_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_di_prova(dir.path()).await;
+        let job_id = state
+            .create_job("file gia elaborato".into(), EncodingParams::default(), 1)
+            .await
+            .unwrap()
+            .job
+            .id;
+        let file_id = Uuid::new_v4();
+        state
+            .mutate(job_id, |job| {
+                let mut file = crate::models::JobFile::new(
+                    "a.mp4".into(),
+                    "a.mp4".into(),
+                    dir.path().join("a.mp4"),
+                    1,
+                );
+                file.id = file_id;
+                file.status = FileStatus::Completed;
+                job.files.push(file);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let error = start_file(state.clone(), job_id, file_id)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ApiError::Conflict(_)));
+        let error = start_file(state.clone(), job_id, Uuid::new_v4())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ApiError::NotFound(_)));
     }
 
     #[tokio::test]

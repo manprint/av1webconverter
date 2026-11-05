@@ -275,6 +275,98 @@ async fn create_job(server: &common::TestServer, name: &str) -> serde_json::Valu
 }
 
 #[tokio::test]
+async fn start_file_inesistente_e_not_found() {
+    let server = common::start().await;
+    let job_id = create_job(&server, "start 404").await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let response = server
+        .client
+        .post(server.url(&format!(
+            "/api/jobs/{job_id}/files/{}/start",
+            uuid::Uuid::new_v4()
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 404);
+}
+
+#[tokio::test]
+async fn start_di_un_file_lascia_in_attesa_gli_altri() {
+    let server = common::start().await;
+    let job_id = create_job(&server, "start singolo").await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (content_type, body) = common::multipart_body_many(
+        "files",
+        &[
+            ("primo.mp4", &b"non e' un video"[..]),
+            ("secondo.mp4", &b"non e' un video"[..]),
+        ],
+    );
+    let uploaded: serde_json::Value = server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/files")))
+        .header("content-type", content_type)
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let primo = uploaded["job"]["files"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let secondo = uploaded["job"]["files"][1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let response = server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/files/{secondo}/start")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    // Il file non è un video valido: fallisce subito, senza bisogno di ffmpeg.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let job = loop {
+        let job: serde_json::Value = server
+            .client
+            .get(server.url(&format!("/api/jobs/{job_id}")))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if job["status"] != "running" || std::time::Instant::now() >= deadline {
+            break job;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_ne!(job["status"], "running", "{job}");
+    let stato = |id: &str| {
+        job["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["id"] == id)
+            .unwrap()["status"]
+            .clone()
+    };
+    assert_eq!(stato(&secondo), "failed", "{job}");
+    assert_eq!(stato(&primo), "pending", "{job}");
+}
+
+#[tokio::test]
 async fn stop_di_un_file_non_in_conversione_e_conflict() {
     let server = common::start().await;
     let job_id = create_job(&server, "stop file").await["id"]

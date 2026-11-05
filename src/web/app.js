@@ -458,6 +458,7 @@ function renderFileRow(job, file, index) {
       <div class="row-actions">
         <button class="button" data-action="move-up" title="Sposta su" aria-label="Sposta su" ${canReorder && index > 0 ? "" : "disabled"}>↑</button>
         <button class="button" data-action="move-down" title="Sposta giù" aria-label="Sposta giù" ${canReorder && index < job.files.length - 1 ? "" : "disabled"}>↓</button>
+        <button class="button" data-action="start-file" title="Avvia solo questo file" ${file.status === "pending" && job.status !== "running" ? "" : "disabled"}>Avvia</button>
         <button class="button" data-action="show-log">Log</button>
         <button class="button danger" data-action="stop-file" title="Ferma questo file" ${file.status === "running" ? "" : "disabled"}>Ferma</button>
         <button class="button" data-action="download-file" ${selectable ? "" : "disabled"}>Scarica</button>
@@ -684,7 +685,8 @@ async function handleJobAction(action, jobId, node, event) {
 
     case "start":
       try {
-        upsertJob(await api(`/api/jobs/${jobId}/start`, { method: "POST" }));
+        // Lo stato arriva via SSE: la risposta può essere più vecchia degli eventi del worker.
+        await api(`/api/jobs/${jobId}/start`, { method: "POST" });
       } catch (error) {
         toast(`Avvio non riuscito: ${error.message}`, "error");
       }
@@ -775,6 +777,15 @@ async function handleFileAction(action, jobId, fileId, event) {
     case "download-file":
       window.location.href = `/api/jobs/${jobId}/files/${fileId}/download`;
       break;
+    case "start-file":
+      try {
+        await api(`/api/jobs/${jobId}/files/${fileId}/start`, { method: "POST" });
+        toast("Conversione del file avviata.");
+      } catch (error) {
+        toast(`Avvio del file non riuscito: ${error.message}`, "error");
+      }
+      break;
+
     case "stop-file":
       try {
         upsertJob(await api(`/api/jobs/${jobId}/files/${fileId}/stop`, { method: "POST" }));

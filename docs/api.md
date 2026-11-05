@@ -225,6 +225,14 @@ finale era già stato pubblicato, resta quello. I file già convertiti restano
 scaricabili anche dal job interrotto (`GET /api/jobs/{job_id}/download`). Un job
 riavviato riparte dai file `pending`.
 
+### `POST /api/jobs/{job_id}/files/{file_id}/start`
+Avvia la conversione del solo file in stato `pending`; gli altri file restano in
+attesa. Il job passa a `running`; a fine conversione torna `pending` se restano
+file in attesa, altrimenti prende lo stato dei file (`completed`, `failed`). Per
+avviare i file rimasti si usa `POST /api/jobs/{job_id}/start`. `404` se il file
+non appartiene al job, `409` se il job è in esecuzione o il file non è `pending`.
+Risponde con la `JobView` aggiornata.
+
 ### `POST /api/jobs/{job_id}/files/{file_id}/stop`
 Ferma il solo file in stato `running`, senza interrompere il job: gli altri file
 continuano e quelli ancora `pending` partono normalmente. Il file passa a
