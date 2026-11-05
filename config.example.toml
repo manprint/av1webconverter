@@ -73,6 +73,13 @@ audio_bitrate = "48k"       # AV1WC_AUDIO_BITRATE — per traccia Opus, ridotta 
 # Contro il banding (cieli, gradienti, scene scure) si può usare per job
 # "tune=5:film-grain=8": circa +19% di file. Misure in docs/qualita-codifica.md.
 svtav1_params = "tune=5"    # AV1WC_SVTAV1_PARAMS
+# SVT-AV1 sharpness: da -7 (più morbido) a 7 (più nitido), default 0.
+# A 0 non viene aggiunta la chiave. Se impostato, ha la precedenza su
+# un'eventuale sharpness già presente in svtav1_params.
+sharpness = 0               # AV1WC_SHARPNESS
+# SVT-AV1 luminance-based QP bias: da 0 a 100, default 0. Dà più bitrate alle
+# scene scure; agisce solo in CRF. A 0 non viene aggiunta la chiave.
+luminance_qp_bias = 0       # AV1WC_LUMINANCE_QP_BIAS
 
 pixel_format = "yuv420p10le"
 # Distanza fra keyframe in secondi: -g = round(fps × valore), quindi 600 frame

@@ -48,7 +48,8 @@ Full detail in `docs/architettura.md`; API contract in `docs/api.md`; the measur
 
 ## Non-obvious constraints
 
-- **`tune=5` is CRF-only.** `EncodingParams::effective_svtav1_params()` forces `tune=0` in `TargetSize` mode because SVT-AV1 rejects `tune=5` under two-pass VBR. It replaces the whole string, so per-job extras such as `film-grain=8` are dropped in that mode. It also needs SVT-AV1 4.x.
+- **`tune=5` is CRF-only.** `EncodingParams::effective_svtav1_params()` forces `tune=0` in `TargetSize` mode because SVT-AV1 rejects `tune=5` under two-pass VBR. It replaces the whole string, so per-job extras such as `film-grain=8` are dropped in that mode; the dedicated `sharpness` and `luminance_qp_bias` fields are re-appended and survive. It also needs SVT-AV1 4.x.
+- **Dedicated SVT fields win over free text.** `sharpness` (`i8`, `-7..=7`) and `luminance_qp_bias` (`u8`, `0..=100`) default to `0`, which emits no key. When non-zero, `effective_svtav1_params()` strips the same key from `svtav1_params` and appends the field value. `luminance-qp-bias` acts only in CRF (SVT's `rc_crf_cqp.c`); `sharpness` applies in every mode.
 - **The scale filter matches the bash scripts.** It uses `scale=...:reset_sar=1`, an option added in ffmpeg 7.1 and present in the FFmpeg 9.0.2 image. The comma inside `min()` must stay escaped; with `scale_height == 0` no scale filter is emitted.
 - **`enable-qm=1:qm-min=0` stays excluded** — it lowered both SSIM and PSNR in the measurements recorded in `README.image.md`.
 - **Encoder defaults are measured, not guessed.** `docs/qualita-codifica.md` records why `tune=5` stays, why variance boost and the psy options are excluded, and why film grain is per-job only. Re-run comparable measurements before changing any of them.

@@ -558,6 +558,57 @@ mod tests {
     }
 
     #[test]
+    fn comando_crf_aggiunge_sharpness_e_luminance_solo_se_diversi_dal_default() {
+        let default_args = as_strings(&build_crf_args(
+            &EncodingParams::default(),
+            &info(60.0, 1),
+            Path::new("/in/a.mp4"),
+            Path::new("/tmp/a.mkv"),
+        ))
+        .join(" ");
+        assert!(!default_args.contains("sharpness="));
+        assert!(!default_args.contains("luminance-qp-bias="));
+
+        let params = EncodingParams {
+            svtav1_params: "tune=0".into(),
+            sharpness: -3,
+            luminance_qp_bias: 25,
+            ..EncodingParams::default()
+        };
+        let joined = as_strings(&build_crf_args(
+            &params,
+            &info(60.0, 1),
+            Path::new("/in/a.mp4"),
+            Path::new("/tmp/a.mkv"),
+        ))
+        .join(" ");
+        assert!(joined.contains("-svtav1-params tune=0:sharpness=-3:luminance-qp-bias=25"));
+    }
+
+    #[test]
+    fn comando_due_passaggi_conserva_sharpness_e_luminance() {
+        let params = EncodingParams {
+            mode: EncodingMode::TargetSize,
+            target_size_mb: Some(300.0),
+            svtav1_params: "tune=5".into(),
+            sharpness: 2,
+            luminance_qp_bias: 15,
+            ..EncodingParams::default()
+        };
+        let joined = as_strings(&build_two_pass_args(
+            &params,
+            &info(60.0, 1),
+            Path::new("/in/a.mp4"),
+            Path::new("/tmp/a.mkv"),
+            Path::new("/tmp/a.log"),
+            1_000_000,
+            1,
+        ))
+        .join(" ");
+        assert!(joined.contains("-svtav1-params tune=0:sharpness=2:luminance-qp-bias=15"));
+    }
+
+    #[test]
     fn comando_due_passaggi_omette_vf_con_altezza_originale() {
         let params = EncodingParams {
             mode: EncodingMode::TargetSize,

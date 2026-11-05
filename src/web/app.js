@@ -91,6 +91,25 @@ const PARAM_FIELDS = [
     type: "text",
     modes: ["crf", "vmaf_analysis"],
   },
+  {
+    key: "sharpness",
+    label: "Sharpness",
+    type: "number",
+    min: -7,
+    max: 7,
+    step: 1,
+    hint: "Da -7 a 7, default 0 (neutro). Positivo aumenta la nitidezza, negativo la riduce.",
+  },
+  {
+    key: "luminance_qp_bias",
+    label: "Luminance-based QP bias",
+    type: "number",
+    min: 0,
+    max: 100,
+    step: 1,
+    modes: ["crf", "vmaf_analysis"],
+    hint: "Da 0 a 100, default 0. Più bitrate alle scene scure; ha effetto solo in CRF.",
+  },
   { key: "pixel_format", label: "Formato pixel", type: "text" },
   { key: "keyint_seconds", label: "Keyframe ogni (secondi)", type: "number", min: 0, max: 60, step: 0.5 },
   { key: "keyint", label: "Keyframe ogni (frame)", type: "number", min: 1, max: 3000 },
@@ -305,6 +324,9 @@ function buildParamsEditor(job) {
         .filter(Boolean)
         .join(" ");
       node.innerHTML = `<label>${field.label}</label><input type="${field.type}" name="${field.key}" ${attributes} />`;
+    }
+    if (field.hint) {
+      node.insertAdjacentHTML("beforeend", `<small>${field.hint}</small>`);
     }
     grid.appendChild(node);
   }

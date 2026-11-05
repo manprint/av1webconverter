@@ -38,6 +38,12 @@ pub struct EncodingParams {
     pub audio_bitrate: String,
     /// Passato a `-svtav1-params`. In modalità `target_size` viene forzato `tune=0`.
     pub svtav1_params: String,
+    /// Bias di nitidezza di SVT-AV1 (`sharpness`, da -7 a 7). `0` non aggiunge
+    /// la chiave e lascia decidere a SVT-AV1 o a `svtav1_params`.
+    pub sharpness: i8,
+    /// Bias del QP in base alla luminanza media (`luminance-qp-bias`, da 0 a
+    /// 100). `0` non aggiunge la chiave; ha effetto solo in CRF.
+    pub luminance_qp_bias: u8,
     pub pixel_format: String,
     /// Distanza massima fra keyframe (`-g`) in fotogrammi. Vale quando
     /// `keyint_seconds` è 0 e quando il frame rate del sorgente non è noto.
@@ -81,6 +87,8 @@ impl Default for EncodingParams {
             preset: 1,
             audio_bitrate: "48k".to_string(),
             svtav1_params: "tune=5".to_string(),
+            sharpness: 0,
+            luminance_qp_bias: 0,
             pixel_format: "yuv420p10le".to_string(),
             keyint: 240,
             keyint_seconds: 10.0,
@@ -124,6 +132,12 @@ impl EncodingParams {
         }
         if !is_safe_ffmpeg_token(&self.svtav1_params) {
             return Err("svtav1_params contiene caratteri non ammessi".into());
+        }
+        if !(-7..=7).contains(&self.sharpness) {
+            return Err("sharpness deve essere compreso fra -7 e 7".into());
+        }
+        if self.luminance_qp_bias > 100 {
+            return Err("luminance_qp_bias deve essere compreso fra 0 e 100".into());
         }
         if !is_safe_ffmpeg_token(&self.pixel_format) {
             return Err("pixel_format contiene caratteri non ammessi".into());
@@ -184,11 +198,24 @@ impl EncodingParams {
 
     /// `tune=5` è accettato da SVT-AV1 in CRF e nell'analisi VMAF; in VBR a due
     /// passaggi si ricade su `tune=0`, l'unico compatibile.
+    ///
+    /// I campi dedicati `sharpness` e `luminance_qp_bias`, quando diversi dal
+    /// default, hanno la precedenza su chiavi omonime già presenti in
+    /// `svtav1_params`: la chiave viene rimossa dal testo libero e riscritta con
+    /// il valore del campo. A `0` non viene aggiunta alcuna chiave.
     pub fn effective_svtav1_params(&self) -> String {
-        match self.mode {
-            EncodingMode::Crf | EncodingMode::VmafAnalysis => self.svtav1_params.clone(),
-            EncodingMode::TargetSize => "tune=0".to_string(),
+        let base = match self.mode {
+            EncodingMode::Crf | EncodingMode::VmafAnalysis => self.svtav1_params.as_str(),
+            EncodingMode::TargetSize => "tune=0",
+        };
+        let mut overrides: Vec<(&str, String)> = Vec::new();
+        if self.sharpness != 0 {
+            overrides.push(("sharpness", self.sharpness.to_string()));
         }
+        if self.luminance_qp_bias != 0 {
+            overrides.push(("luminance-qp-bias", self.luminance_qp_bias.to_string()));
+        }
+        overlay_svtav1_params(base, &overrides)
     }
 
     /// GOP passato a `-g`, in fotogrammi.
@@ -232,6 +259,27 @@ pub fn parse_bitrate(value: &str) -> Option<u64> {
         return None;
     }
     Some((number * multiplier as f64).round() as u64)
+}
+
+/// Rimuove da una lista `chiave=valore` separata da `:` le chiavi sostituite e
+/// accoda i valori espliciti, così i campi dedicati vincono sul testo libero.
+fn overlay_svtav1_params(base: &str, overrides: &[(&str, String)]) -> String {
+    let mut parts: Vec<String> = base
+        .split(':')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .filter(|part| {
+            let key = part.split('=').next().unwrap_or_default().trim();
+            !overrides.iter().any(|(name, _)| *name == key)
+        })
+        .map(str::to_string)
+        .collect();
+    parts.extend(
+        overrides
+            .iter()
+            .map(|(name, value)| format!("{name}={value}")),
+    );
+    parts.join(":")
 }
 
 /// I valori che finiscono nella riga di comando di ffmpeg non passano da una
@@ -521,6 +569,16 @@ impl Config {
         if let Ok(value) = var("AV1WC_SVTAV1_PARAMS") {
             self.encoding.svtav1_params = value;
         }
+        if let Ok(value) = var("AV1WC_SHARPNESS") {
+            if let Ok(parsed) = value.parse() {
+                self.encoding.sharpness = parsed;
+            }
+        }
+        if let Ok(value) = var("AV1WC_LUMINANCE_QP_BIAS") {
+            if let Ok(parsed) = value.parse() {
+                self.encoding.luminance_qp_bias = parsed;
+            }
+        }
         if let Ok(value) = var("AV1WC_KEYINT_SECONDS") {
             if let Ok(parsed) = value.parse::<f64>() {
                 self.encoding.keyint_seconds = parsed;
@@ -629,6 +687,59 @@ mod tests {
         assert!(params.validate().is_ok());
     }
 
+    #[test]
+    fn sharpness_e_luminance_di_default_non_aggiungono_chiavi() {
+        let params = EncodingParams::default();
+        assert_eq!(params.sharpness, 0);
+        assert_eq!(params.luminance_qp_bias, 0);
+        assert_eq!(params.effective_svtav1_params(), "tune=5");
+    }
+    #[test]
+    fn sharpness_e_luminance_fuori_intervallo_sono_rifiutati() {
+        let mut params = EncodingParams {
+            sharpness: -8,
+            ..Default::default()
+        };
+        assert!(params.validate().is_err());
+        params.sharpness = 8;
+        assert!(params.validate().is_err());
+        params.sharpness = -7;
+        assert!(params.validate().is_ok());
+        params.sharpness = 7;
+        assert!(params.validate().is_ok());
+        params.luminance_qp_bias = 101;
+        assert!(params.validate().is_err());
+        params.luminance_qp_bias = 100;
+        assert!(params.validate().is_ok());
+    }
+    #[test]
+    fn i_campi_dedicati_vincono_su_svtav1_params() {
+        let params = EncodingParams {
+            svtav1_params: "tune=5:sharpness=-2:luminance-qp-bias=20".into(),
+            sharpness: 4,
+            luminance_qp_bias: 35,
+            ..Default::default()
+        };
+        assert_eq!(
+            params.effective_svtav1_params(),
+            "tune=5:sharpness=4:luminance-qp-bias=35"
+        );
+    }
+    #[test]
+    fn i_campi_dedicati_restano_in_modalita_target_size() {
+        let params = EncodingParams {
+            mode: EncodingMode::TargetSize,
+            target_size_mb: Some(300.0),
+            svtav1_params: "tune=5:sharpness=-2".into(),
+            sharpness: -3,
+            luminance_qp_bias: 10,
+            ..Default::default()
+        };
+        assert_eq!(
+            params.effective_svtav1_params(),
+            "tune=0:sharpness=-3:luminance-qp-bias=10"
+        );
+    }
     #[test]
     fn target_size_forza_tune_zero() {
         let params = EncodingParams {

@@ -134,6 +134,41 @@ async fn i_default_espongono_i_parametri_di_analisi() {
     assert_eq!(body["params"]["crf_test_steps"], 3);
     assert_eq!(body["params"]["vmaf_target"], 93.0);
     assert_eq!(body["params"]["vmaf_segment_duration_seconds"], 30.0);
+    assert_eq!(body["params"]["sharpness"], 0);
+    assert_eq!(body["params"]["luminance_qp_bias"], 0);
+}
+#[tokio::test]
+async fn sharpness_e_luminance_rispettano_gli_intervalli_svtav1() {
+    let server = common::start().await;
+    let response = server
+        .client
+        .post(server.url("/api/jobs"))
+        .json(&json!({
+            "name": "nitidezza",
+            "params": { "sharpness": -7, "luminance_qp_bias": 100 },
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let job: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(job["params"]["sharpness"], -7);
+    assert_eq!(job["params"]["luminance_qp_bias"], 100);
+
+    for params in [
+        json!({ "sharpness": -8 }),
+        json!({ "sharpness": 8 }),
+        json!({ "luminance_qp_bias": 101 }),
+    ] {
+        let response = server
+            .client
+            .post(server.url("/api/jobs"))
+            .json(&json!({ "name": "parametro non valido", "params": params }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400, "parametri accettati: {params}");
+    }
 }
 
 #[tokio::test]

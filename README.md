@@ -153,6 +153,8 @@ poter configurare il container senza montare un TOML. Le più usate:
 | `AV1WC_PRESET`             | preset SVT-AV1 di default                          |
 | `AV1WC_SCALE_HEIGHT`       | altezza massima dell'output; `0` = dimensione originale |
 | `AV1WC_SVTAV1_PARAMS`      | `-svtav1-params` di default                        |
+| `AV1WC_SHARPNESS`          | sharpness SVT-AV1, da -7 a 7 (default 0)          |
+| `AV1WC_LUMINANCE_QP_BIAS`  | luminance-based QP bias, da 0 a 100 (default 0)   |
 | `AV1WC_KEYINT_SECONDS`     | GOP in secondi, convertito in frame dal frame rate del sorgente; `0` = `keyint` fisso |
 | `AV1WC_MEASURE_VMAF`       | abilita la misura VMAF (`true`/`false`)            |
 | `AV1WC_VMAF_MODEL`         | modello VMAF di default                           |
@@ -198,6 +200,12 @@ Default rilevanti, ereditati dalle misure documentate in `README.image.md` e in
   `ac-bias`, `sharpness`): a parità di CRF ingrandivano il file dal 43 al 56%, e
   a parità di dimensione guadagnavano solo su XPSNR: SSIMULACRA2 restava in
   pari e VMAF perdeva dal 4 al 16%.
+- `sharpness = 0` e `luminance_qp_bias = 0` sono i default documentati da
+  SVT-AV1 4.2 e non aggiungono chiavi a `-svtav1-params`. `sharpness` accetta
+  `-7..=7` (positivo più nitido, negativo più morbido) e vale in tutte le
+  modalità; `luminance_qp_bias` accetta `0..=100` e dà più bitrate alle scene
+  scure solo in CRF. Se impostati, i due campi hanno la precedenza su chiavi
+  omonime presenti in `svtav1_params`.
 - `film-grain=8` non è un default ma si può impostare per job
   (`svtav1_params = "tune=5:film-grain=8"`) su sorgenti con banding evidente,
   come cieli, gradienti e scene scure: nelle misure elimina il banding al costo

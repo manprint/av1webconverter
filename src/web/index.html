@@ -117,6 +117,16 @@
                   circa +19% di file.</small>
               </div>
               <div class="field">
+                <label for="param-sharpness">Sharpness</label>
+                <input id="param-sharpness" name="sharpness" type="number" min="-7" max="7" step="1" value="0" />
+                <small>Da -7 a 7, default 0 (neutro). Positivo aumenta la nitidezza, negativo la riduce.</small>
+              </div>
+              <div class="field" data-mode="crf vmaf_analysis">
+                <label for="param-luminance-qp-bias">Luminance-based QP bias</label>
+                <input id="param-luminance-qp-bias" name="luminance_qp_bias" type="number" min="0" max="100" step="1" value="0" />
+                <small>Da 0 a 100, default 0. Più bitrate alle scene scure; ha effetto solo in CRF.</small>
+              </div>
+              <div class="field">
                 <label for="param-vmaf-model">Modello VMAF</label>
                 <input id="param-vmaf-model" name="vmaf_model" type="text" placeholder="vmaf_v1.0.16_5d0h" />
               </div>

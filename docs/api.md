@@ -124,6 +124,14 @@ altri modelli restano invariati. `files[].vmaf.model` e
 passaggi) oppure `vmaf_analysis` (analisi preliminare su spezzoni, seguita dalla
 codifica CRF a un passaggio con il CRF scelto).
 
+`params.sharpness` (default `0`, da `-7` a `7`) e `params.luminance_qp_bias`
+(default `0`, da `0` a `100`) sono inoltrati a SVT-AV1 come `sharpness` e
+`luminance-qp-bias` dentro `-svtav1-params`. A `0` la chiave non viene aggiunta;
+con un valore diverso da `0` il campo ha la precedenza su un'eventuale chiave
+omonima già presente in `svtav1_params`. `luminance-qp-bias` ha effetto solo in
+CRF, mentre `sharpness` vale in tutte le modalità. Un valore fuori intervallo
+fa rispondere `400`.
+
 In modalità `vmaf_analysis` si possono impostare i parametri seguenti:
 
 | Parametro | Default | Intervallo | Effetto |
