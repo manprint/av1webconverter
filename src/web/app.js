@@ -129,6 +129,15 @@ const JOB_STATUS_LABEL = {
   stopped: "interrotto",
 };
 
+/** Un job in attesa con file già elaborati è da completare, non ancora da avviare. */
+function jobStatusLabel(job) {
+  const counts = job.counts ?? {};
+  const elaborati =
+    (counts.completed ?? 0) + (counts.skipped ?? 0) + (counts.failed ?? 0) + (counts.cancelled ?? 0);
+  if (job.status === "pending" && elaborati > 0) return "da completare";
+  return JOB_STATUS_LABEL[job.status] ?? job.status;
+}
+
 const FILE_STATUS_LABEL = {
   pending: "in attesa",
   running: "in conversione",
@@ -363,7 +372,7 @@ function renderJob(job) {
 
   node.querySelector('[data-field="name"]').textContent = job.name;
   const status = node.querySelector('[data-field="status"]');
-  status.textContent = JOB_STATUS_LABEL[job.status] ?? job.status;
+  status.textContent = jobStatusLabel(job);
   status.className = `badge badge-${job.status}`;
 
   const percent = job.overall_progress ?? 0;
