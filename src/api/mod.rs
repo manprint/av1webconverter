@@ -7,7 +7,7 @@ pub mod upload;
 pub mod web;
 
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{middleware, Json, Router};
 use serde_json::json;
 use tower_http::trace::TraceLayer;
@@ -36,6 +36,10 @@ pub fn router(state: SharedState) -> Router {
             post(upload::upload).layer(DefaultBodyLimit::max(upload_limit)),
         )
         .route("/jobs/{job_id}/files/{file_id}", delete(jobs::delete_file))
+        .route(
+            "/jobs/{job_id}/files/{file_id}/order",
+            patch(jobs::move_file),
+        )
         .route("/jobs/{job_id}/files/{file_id}/log", get(jobs::file_log))
         .route(
             "/jobs/{job_id}/files/{file_id}/download",

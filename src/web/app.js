@@ -390,12 +390,12 @@ function renderJob(job) {
 
   node.querySelector('[data-action="download-selection"]').disabled = selectionFor(job.id).size === 0;
   node.querySelector('[data-field="files"]').replaceChildren(
-    ...job.files.map((file) => renderFileRow(job, file)),
+    ...job.files.map((file, index) => renderFileRow(job, file, index)),
   );
   return node;
 }
 
-function renderFileRow(job, file) {
+function renderFileRow(job, file, index) {
   const row = document.createElement("tr");
   row.dataset.fileId = file.id;
 
@@ -404,13 +404,18 @@ function renderFileRow(job, file) {
   const progress = file.progress ?? {};
   const passLabel =
     progress.total_passes > 1 ? ` · passaggio ${progress.pass}/${progress.total_passes}` : "";
+  // L'ordine dell'elenco è quello di conversione: si cambia solo a job fermo.
+  const canReorder = job.status !== "running";
 
   row.innerHTML = `
     <td class="col-select">
       <input type="checkbox" data-action="select-file" ${selectable ? "" : "disabled"} ${checked ? "checked" : ""} />
     </td>
     <td>
-      <span class="file-name" title="${escapeHtml(file.original_name)}">${escapeHtml(file.original_name)}</span>
+      <span class="file-line">
+        <span class="file-order">${index + 1}.</span>
+        <span class="file-name" title="${escapeHtml(file.original_name)}">${escapeHtml(file.original_name)}</span>
+      </span>
       ${file.error ? `<span class="file-detail" style="color:var(--error)">${escapeHtml(file.error)}</span>` : ""}
     </td>
     <td><span class="badge badge-${file.status}">${FILE_STATUS_LABEL[file.status] ?? file.status}</span></td>
@@ -426,6 +431,8 @@ function renderFileRow(job, file) {
     </td>
     <td class="col-actions">
       <div class="row-actions">
+        <button class="button" data-action="move-up" title="Sposta su" aria-label="Sposta su" ${canReorder && index > 0 ? "" : "disabled"}>↑</button>
+        <button class="button" data-action="move-down" title="Sposta giù" aria-label="Sposta giù" ${canReorder && index < job.files.length - 1 ? "" : "disabled"}>↓</button>
         <button class="button" data-action="show-log">Log</button>
         <button class="button" data-action="download-file" ${selectable ? "" : "disabled"}>Scarica</button>
         <button class="button danger" data-action="remove-file" ${file.status === "running" ? "disabled" : ""}>Rimuovi</button>
@@ -711,6 +718,24 @@ async function handleFileAction(action, jobId, fileId, event) {
     case "download-file":
       window.location.href = `/api/jobs/${jobId}/files/${fileId}/download`;
       break;
+
+    case "move-up":
+    case "move-down": {
+      const index = job.files.findIndex((item) => item.id === fileId);
+      const position = action === "move-up" ? index - 1 : index + 1;
+      if (index < 0 || position < 0 || position >= job.files.length) return;
+      try {
+        upsertJob(
+          await api(`/api/jobs/${jobId}/files/${fileId}/order`, {
+            method: "PATCH",
+            body: JSON.stringify({ position }),
+          }),
+        );
+      } catch (error) {
+        toast(`Riordino non riuscito: ${error.message}`, "error");
+      }
+      break;
+    }
 
     case "remove-file":
       if (!confirm(`Rimuovere "${file.original_name}" dal job?`)) return;

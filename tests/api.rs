@@ -513,6 +513,98 @@ async fn nomi_duplicati_restano_distinti_su_disco() {
 }
 
 #[tokio::test]
+async fn riordino_dei_file_cambia_l_ordine_di_conversione() {
+    let server = common::start().await;
+    let job_id = create_job(&server, "ordine").await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    for name in ["primo.mp4", "secondo.mp4"] {
+        let (content_type, body) = common::multipart_body("files", name, b"dati");
+        server
+            .client
+            .post(server.url(&format!("/api/jobs/{job_id}/files")))
+            .header("content-type", content_type)
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+    }
+
+    let job: serde_json::Value = server
+        .client
+        .get(server.url(&format!("/api/jobs/{job_id}")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let primo = job["files"][0]["id"].as_str().unwrap().to_string();
+    let secondo = job["files"][1]["id"].as_str().unwrap().to_string();
+
+    let moved: serde_json::Value = server
+        .client
+        .patch(server.url(&format!("/api/jobs/{job_id}/files/{secondo}/order")))
+        .json(&json!({ "position": 0 }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(moved["files"][0]["original_name"], "secondo.mp4");
+    assert_eq!(moved["files"][1]["original_name"], "primo.mp4");
+
+    let restored: serde_json::Value = server
+        .client
+        .patch(server.url(&format!("/api/jobs/{job_id}/files/{secondo}/order")))
+        .json(&json!({ "position": 1 }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(restored["files"][0]["id"], primo.as_str());
+    assert_eq!(restored["files"][1]["id"], secondo.as_str());
+}
+
+#[tokio::test]
+async fn start_risponde_con_il_job_gia_avviato() {
+    let server = common::start().await;
+    let job_id = create_job(&server, "avvio").await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (content_type, body) = common::multipart_body("files", "film.mp4", b"dati");
+    server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/files")))
+        .header("content-type", content_type)
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+
+    let started: serde_json::Value = server
+        .client
+        .post(server.url(&format!("/api/jobs/{job_id}/start")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_ne!(
+        started["status"], "pending",
+        "la risposta di start deve abilitare subito il pulsante Ferma: {started}"
+    );
+}
+
+#[tokio::test]
 async fn rimozione_di_un_file_cancella_anche_il_sorgente() {
     let server = common::start().await;
     let job_id = create_job(&server, "rimozione").await["id"]

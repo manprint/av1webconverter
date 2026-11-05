@@ -71,9 +71,12 @@ dimensione dei sorgenti**: un file da 4 GB non vale quanto uno da 40 MB.
 ## Concorrenza e ordine
 
 Il worker di un job elabora i file con `for_each_concurrent(concurrency, …)` sullo
-stream dei file in ordine di caricamento. Con `concurrency = 1` si ottiene la
-sequenza richiesta: il prossimo file parte al termine del precedente. Il valore è
-un default di configurazione, modificabile per singolo job dal frontend.
+stream dei file nell'ordine dell'elenco del job, cioè quello di conversione. Per
+default è l'ordine di caricamento; il frontend lo cambia con i pulsanti ↑/↓
+(API `PATCH /api/jobs/{job_id}/files/{file_id}/order`), consentito solo a job
+fermo. Con `concurrency = 1` si ottiene la sequenza richiesta: il prossimo file
+parte al termine del precedente. Il valore è un default di configurazione,
+modificabile per singolo job dal frontend.
 
 Un flag atomico per job (`worker_running`) impedisce due worker sullo stesso job.
 

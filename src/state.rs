@@ -323,6 +323,31 @@ impl AppState {
         self.logs.purge_file(job_id, file_id).await;
         Ok(())
     }
+
+    /// Sposta un file nella posizione indicata dell'elenco del job: l'ordine
+    /// dell'elenco è quello in cui il worker avvia le conversioni.
+    pub async fn move_file(&self, job_id: Uuid, file_id: Uuid, position: usize) -> ApiResult<()> {
+        self.mutate(job_id, move |job| {
+            if job.status == JobStatus::Running {
+                return Err(ApiError::Conflict(
+                    "l'ordine non è modificabile mentre il job è in esecuzione".into(),
+                ));
+            }
+            let index = job
+                .files
+                .iter()
+                .position(|file| file.id == file_id)
+                .ok_or_else(|| ApiError::NotFound(format!("file {file_id} non trovato")))?;
+            let target = position.min(job.files.len().saturating_sub(1));
+            if index != target {
+                let file = job.files.remove(index);
+                job.files.insert(target, file);
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(())
+    }
 }
 
 /// Nome sicuro e univoco per il filesystem, preservando l'estensione.
@@ -477,5 +502,70 @@ mod tests {
         assert_eq!(view.job.status, JobStatus::Pending);
         assert_eq!(view.job.files[0].status, FileStatus::Pending);
         assert_eq!(view.job.files[0].progress.percent, 0.0);
+    }
+
+    #[tokio::test]
+    async fn l_ordine_dei_file_si_cambia_solo_a_job_fermo() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.paths.input_dir = dir.path().join("in");
+        config.paths.output_dir = dir.path().join("out");
+        config.paths.data_dir = dir.path().join("data");
+        config.paths.log_dir = dir.path().join("logs");
+        config.prepare_directories().unwrap();
+
+        let state = AppState::new(config).await.unwrap();
+        let view = state
+            .create_job("ordine".into(), EncodingParams::default(), 1)
+            .await
+            .unwrap();
+        let job_id = view.job.id;
+        let ids = state
+            .mutate(job_id, |job| {
+                let mut ids = Vec::new();
+                for name in ["a.mp4", "b.mp4", "c.mp4"] {
+                    let file = JobFile::new(name.into(), name.into(), PathBuf::from(name), 1);
+                    ids.push(file.id);
+                    job.files.push(file);
+                }
+                Ok(ids)
+            })
+            .await
+            .unwrap();
+
+        state.move_file(job_id, ids[2], 0).await.unwrap();
+        let ordine: Vec<Uuid> = state
+            .view(job_id)
+            .await
+            .unwrap()
+            .job
+            .files
+            .iter()
+            .map(|file| file.id)
+            .collect();
+        assert_eq!(ordine, vec![ids[2], ids[0], ids[1]]);
+
+        // Una posizione oltre la fine viene limitata all'ultimo posto.
+        state.move_file(job_id, ids[2], 99).await.unwrap();
+        let ultimo = state
+            .view(job_id)
+            .await
+            .unwrap()
+            .job
+            .files
+            .last()
+            .unwrap()
+            .id;
+        assert_eq!(ultimo, ids[2]);
+
+        state
+            .mutate(job_id, |job| {
+                job.status = JobStatus::Running;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let error = state.move_file(job_id, ids[2], 0).await.unwrap_err();
+        assert!(matches!(error, ApiError::Conflict(_)));
     }
 }

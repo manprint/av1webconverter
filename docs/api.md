@@ -201,14 +201,17 @@ mentre il job è in esecuzione (`409`): quei valori sono già in uso da ffmpeg.
 
 ### `POST /api/jobs/{job_id}/start`
 
-Avvia la conversione dei file in stato `pending`. `400` se il job non ha file o
-non ha nulla in attesa, `409` se è già in esecuzione.
+Avvia la conversione dei file in stato `pending`. La risposta contiene già la
+`JobView` con stato `running`, così il pulsante Ferma è subito attivo. `400` se
+il job non ha file o non ha nulla in attesa, `409` se è già in esecuzione.
 
 ### `POST /api/jobs/{job_id}/stop`
 
 Interrompe il job: i processi ffmpeg attivi vengono terminati, i file in corso
 passano a `cancelled` e nessun output parziale resta sul disco. I file già
-convertiti restano scaricabili. Un job riavviato riparte dai file `pending`.
+convertiti restano scaricabili anche dal job interrotto
+(`GET /api/jobs/{job_id}/download`). Un job riavviato riparte dai file
+`pending`.
 
 ### `DELETE /api/jobs/{job_id}`
 
@@ -246,6 +249,18 @@ in stato `pending`.
 
 Rimuove il file dal job ed elimina sorgente, eventuale output e log. `409` se il
 file è in conversione. Risponde con la `JobView` aggiornata.
+
+### `PATCH /api/jobs/{job_id}/files/{file_id}/order`
+
+Cambia l'ordine di conversione spostando il file nella posizione indicata
+(zero-based) dell'elenco del job:
+
+```json
+{ "position": 0 }
+```
+
+`409` se il job è in esecuzione. Risponde con la `JobView` aggiornata; l'ordine
+dei file nell'array `files` è quello in cui il worker avvia le conversioni.
 
 ### `GET /api/jobs/{job_id}/files/{file_id}/log`
 

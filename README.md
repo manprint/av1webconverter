@@ -21,13 +21,14 @@ parte SSH: ffmpeg viene eseguito nello stesso container del servizio.
   sovrascrivibili dal frontend; l'altezza massima si sceglie da un menu con
   valori predefiniti, inclusa `Dimensione originale`.
 - Conversione **in sequenza** dentro il job (1 conversione simultanea per
-  default, valore configurabile e modificabile per job).
+  default, valore configurabile e modificabile per job). L'ordine di
+  conversione dei file si cambia dal frontend con i pulsanti ↑/↓.
 - Progresso per file e progresso totale del job, pesato sulla dimensione dei
   sorgenti.
 - Log di conversione per file, con lo stesso formato degli script bash,
   consultabili live dal frontend e persistiti su disco.
 - Stop e cancellazione di un job in qualsiasi stato, con pulizia dei file sul
-  backend.
+  backend; i file già convertiti restano scaricabili.
 - Download dei file convertiti: singolo, selezione multipla o intero job in ZIP.
 - Notifiche Slack di terminazione ed errore.
 - Log applicativi strutturati JSON.

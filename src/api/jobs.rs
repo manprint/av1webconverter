@@ -143,6 +143,22 @@ pub async fn delete_file(
     Ok(Json(state.view(job_id).await?))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct MoveFileRequest {
+    /// Posizione desiderata, zero-based, nell'elenco del job.
+    pub position: usize,
+}
+
+/// Cambia l'ordine di conversione spostando il file nella posizione richiesta.
+pub async fn move_file(
+    State(state): State<SharedState>,
+    Path((job_id, file_id)): Path<(Uuid, Uuid)>,
+    Json(request): Json<MoveFileRequest>,
+) -> ApiResult<Json<JobView>> {
+    state.move_file(job_id, file_id, request.position).await?;
+    Ok(Json(state.view(job_id).await?))
+}
+
 /// Log di conversione di un singolo file.
 pub async fn file_log(
     State(state): State<SharedState>,

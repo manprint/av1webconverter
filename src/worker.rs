@@ -68,6 +68,24 @@ pub async fn start_job(state: SharedState, job_id: Uuid) -> ApiResult<()> {
     }
     handle.reset_stop();
 
+    // Lo stato `running` viene scritto prima di restituire la risposta: il
+    // frontend abilita il pulsante Ferma sulla JobView ricevuta da `start`.
+    let snapshot = {
+        let mut job = handle.job.write().await;
+        job.status = JobStatus::Running;
+        job.error = None;
+        job.finished_at = None;
+        if job.started_at.is_none() {
+            job.started_at = Some(OffsetDateTime::now_utc());
+        }
+        job.clone()
+    };
+    state.persist_and_publish(&snapshot).await;
+    state.events.publish(Event::JobStatusChanged {
+        job_id,
+        status: JobStatus::Running,
+    });
+
     tokio::spawn(async move {
         let handle_for_flag = handle.clone();
         if let Err(error) = run_job(state, handle).await {
@@ -104,13 +122,7 @@ async fn run_job(state: SharedState, handle: Arc<JobHandle>) -> Result<()> {
     let job_id = handle.id;
 
     let (files, concurrency) = {
-        let mut job = handle.job.write().await;
-        job.status = JobStatus::Running;
-        job.error = None;
-        job.finished_at = None;
-        if job.started_at.is_none() {
-            job.started_at = Some(OffsetDateTime::now_utc());
-        }
+        let job = handle.job.read().await;
         let pending: Vec<Uuid> = job
             .files
             .iter()
@@ -119,14 +131,10 @@ async fn run_job(state: SharedState, handle: Arc<JobHandle>) -> Result<()> {
             .collect();
         (pending, job.concurrency.max(1))
     };
-    publish_snapshot(&state, &handle).await;
-    state.events.publish(Event::JobStatusChanged {
-        job_id,
-        status: JobStatus::Running,
-    });
     tracing::info!(%job_id, files = files.len(), concurrency, "avvio conversione job");
 
-    // `for_each_concurrent` avvia i file nell'ordine di caricamento: con
+    // `for_each_concurrent` avvia i file nell'ordine dell'elenco del job (per
+    // default quello di caricamento, modificabile dal frontend): con
     // concurrency = 1 si ottiene la sequenza richiesta dalle specifiche.
     futures::stream::iter(files)
         .for_each_concurrent(concurrency, |file_id| {
@@ -1350,5 +1358,36 @@ mod tests {
         let state = state_di_prova(dir.path()).await;
         let error = start_job(state.clone(), Uuid::new_v4()).await.unwrap_err();
         assert!(matches!(error, ApiError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn l_avvio_lascia_il_job_gia_in_esecuzione() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_di_prova(dir.path()).await;
+        let view = state
+            .create_job("avvio".into(), EncodingParams::default(), 1)
+            .await
+            .unwrap();
+        let job_id = view.job.id;
+        state
+            .mutate(job_id, |job| {
+                job.files.push(crate::models::JobFile::new(
+                    "a.mp4".into(),
+                    "a.mp4".into(),
+                    dir.path().join("a.mp4"),
+                    1,
+                ));
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        start_job(state.clone(), job_id).await.unwrap();
+        // La risposta di `start` deve poter abilitare subito il pulsante Ferma:
+        // il job non può restare `pending` dopo l'avvio.
+        assert_ne!(
+            state.view(job_id).await.unwrap().job.status,
+            JobStatus::Pending
+        );
     }
 }

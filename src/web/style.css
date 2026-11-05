@@ -472,12 +472,24 @@ table.files tr:last-child td {
   white-space: nowrap;
 }
 
+.file-line {
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
+}
+
 .file-name {
   display: block;
   max-width: 34ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.file-order {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .file-detail {
